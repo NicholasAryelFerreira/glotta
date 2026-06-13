@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossolalia — Live Translation</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    max-width: 480px; margin: 0 auto; padding: 24px;
+    display: flex; flex-direction: column; gap: 16px; text-align: center;
+  }
+  h1 { margin-bottom: 0; }
+  .sub { color: #888; margin-top: 4px; }
+  input, button {
+    font-size: 18px; padding: 14px; border-radius: 12px; border: 1px solid #ccc; width: 100%;
+    box-sizing: border-box;
+  }
+  button { background: #4a5fc1; color: white; border: none; cursor: pointer; font-weight: 600; }
+  button:active { opacity: .85; }
+  .hint { font-size: 14px; color: #888; }
+</style>
+</head>
+<body>
+  <h1>Glossolalia</h1>
+  <p class="sub">Real-time sermon translation</p>
+  <input id="title" placeholder="Session title (e.g. Sunday Service)">
+  <button id="start">Start a session (this device is the speaker)</button>
+  <p class="hint">Listeners join by scanning the QR code shown on the next screen — no app needed.</p>
+<script>
+document.getElementById('start').onclick = async () => {
+  const title = document.getElementById('title').value.trim();
+  const res = await fetch('/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  const data = await res.json();
+  location.href = '/speak/' + data.sessionId;
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speaker — Glossolalia</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    max-width: 520px; margin: 0 auto; padding: 24px;
+    display: flex; flex-direction: column; gap: 14px; align-items: center; text-align: center;
+  }
+  h1 { margin: 0; font-size: 22px; }
+  .code { font-size: 32px; letter-spacing: 6px; font-weight: 700; }
+  img.qr { width: 260px; height: 260px; border-radius: 12px; background: white; padding: 8px; }
+  .url { font-size: 14px; color: #888; word-break: break-all; }
+  button {
+    font-size: 18px; padding: 14px 28px; border-radius: 12px; border: none;
+    background: #2e9e5b; color: white; font-weight: 600; cursor: pointer; width: 100%;
+  }
+  button.live { background: #c23b3b; }
+  .stats { font-size: 15px; color: #888; min-height: 20px; }
+  .transcript {
+    width: 100%; min-height: 80px; max-height: 200px; overflow-y: auto;
+    text-align: left; font-size: 15px; background: rgba(128,128,128,.1);
+    border-radius: 12px; padding: 12px; box-sizing: border-box; white-space: pre-wrap;
+  }
+  .err { color: #c23b3b; font-size: 14px; min-height: 18px; }
+</style>
+</head>
+<body>
+  <h1 id="title">Speaker</h1>
+  <div class="code" id="code"></div>
+  <img class="qr" id="qr" alt="QR code to join">
+  <div class="url" id="joinUrl"></div>
+  <button id="toggle">Start speaking</button>
+  <div class="stats" id="stats">No listeners yet</div>
+  <div class="transcript" id="transcript">Live transcript of what the model hears will appear here (once at least one listener has joined).</div>
+  <div class="err" id="err"></div>
+
+<script>
+const sessionId = location.pathname.split('/').pop();
+const codeEl = document.getElementById('code');
+const errEl = document.getElementById('err');
+const statsEl = document.getElementById('stats');
+const transcriptEl = document.getElementById('transcript');
+const toggleBtn = document.getElementById('toggle');
+
+codeEl.textContent = sessionId;
+document.getElementById('qr').src = `/api/sessions/${sessionId}/qr.png`;
+document.getElementById('joinUrl').textContent = `${location.origin}/join/${sessionId}`;
+
+fetch(`/api/sessions/${sessionId}`).then(r => {
+  if (!r.ok) { errEl.textContent = 'Session not found — go back and start a new one.'; toggleBtn.disabled = true; }
+  return r.json();
+}).then(d => { if (d && d.title) document.getElementById('title').textContent = d.title; });
+
+let ws = null, audioCtx = null, workletNode = null, mediaStream = null;
+let transcriptStarted = false;
+
+// AudioWorklet that resamples mic input to 16 kHz mono Int16 and emits ~100 ms chunks.
+const workletCode = `
+class PCMCapture extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / 16000;
+    this.readPos = 0;
+    this.buffer = [];
+    this.out = new Int16Array(1600); // 100 ms at 16 kHz
+    this.outPos = 0;
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    this.buffer.push(...ch);
+    // Linear-interpolation resample from the device rate down to 16 kHz.
+    while (this.readPos + 1 < this.buffer.length) {
+      const i = Math.floor(this.readPos);
+      const frac = this.readPos - i;
+      const sample = this.buffer[i] * (1 - frac) + this.buffer[i + 1] * frac;
+      this.out[this.outPos++] = Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
+      this.readPos += this.ratio;
+      if (this.outPos === this.out.length) {
+        this.port.postMessage(this.out.slice(0));
+        this.outPos = 0;
+      }
+    }
+    const consumed = Math.floor(this.readPos);
+    this.buffer = this.buffer.slice(consumed);
+    this.readPos -= consumed;
+    return true;
+  }
+}
+registerProcessor('pcm-capture', PCMCapture);
+`;
+
+function int16ToBase64(int16) {
+  const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
+  return btoa(bin);
+}
+
+function connectWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/speaker/${sessionId}`);
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'stats') {
+      const parts = Object.entries(msg.listeners).map(([l, n]) => `${l}: ${n}`);
+      statsEl.textContent = msg.total === 0 ? 'No listeners yet' : `${msg.total} listening — ${parts.join(', ')}`;
+    } else if (msg.type === 'transcript' && msg.kind === 'input') {
+      if (!transcriptStarted) { transcriptEl.textContent = ''; transcriptStarted = true; }
+      transcriptEl.textContent += msg.text;
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    } else if (msg.type === 'error') {
+      errEl.textContent = msg.message;
+    }
+  };
+  ws.onclose = () => { if (running) errEl.textContent = 'Connection lost — reconnecting…'; if (running) setTimeout(connectWs, 1500); };
+  ws.onopen = () => { errEl.textContent = ''; };
+}
+
+let running = false;
+
+async function start() {
+  errEl.textContent = '';
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+    });
+  } catch (e) {
+    errEl.textContent = 'Microphone access denied. Note: browsers only allow the mic on https or on localhost.';
+    return;
+  }
+  audioCtx = new AudioContext();
+  const blobUrl = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
+  await audioCtx.audioWorklet.addModule(blobUrl);
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+  workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
+  workletNode.port.onmessage = (ev) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'audio', data: int16ToBase64(ev.data) }));
+    }
+  };
+  source.connect(workletNode);
+  connectWs();
+  running = true;
+  toggleBtn.textContent = 'Stop speaking';
+  toggleBtn.classList.add('live');
+}
+
+function stop() {
+  running = false;
+  if (workletNode) workletNode.disconnect();
+  if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close();
+  if (ws) ws.close();
+  workletNode = mediaStream = audioCtx = ws = null;
+  toggleBtn.textContent = 'Start speaking';
+  toggleBtn.classList.remove('live');
+}
+
+toggleBtn.onclick = () => (running ? stop() : start());
+</script>
+</body>
+</html>

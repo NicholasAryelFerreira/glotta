@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Glossolalia",
+    "slug": "glossolalia",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "glossolalia",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "org.glossolalia.speaker",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Glossolalia uses your microphone to capture the speaker's voice for live translation.",
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "package": "org.glossolalia.speaker",
+      "permissions": ["RECORD_AUDIO"],
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Glossolalia uses your microphone to capture the speaker's voice for live translation."
+        }
+      ]
+    ]
+  }
+}

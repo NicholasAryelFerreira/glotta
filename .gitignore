@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Secrets — never commit your Gemini API key
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.*
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Expo build output
+app/.expo/
+app/dist/
