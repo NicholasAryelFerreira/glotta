@@ -2,53 +2,88 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Listen — Glossolalia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="/styles.css">
 <style>
-  :root { color-scheme: light dark; }
-  body {
-    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-    max-width: 480px; margin: 0 auto; padding: 24px;
-    display: flex; flex-direction: column; gap: 14px; text-align: center;
-  }
-  h1 { margin: 0; font-size: 22px; }
-  .sub { color: #888; margin: 0; }
-  select, button {
-    font-size: 18px; padding: 14px; border-radius: 12px; width: 100%; box-sizing: border-box;
-  }
-  select { border: 1px solid #ccc; }
-  button { background: #4a5fc1; color: white; border: none; font-weight: 600; cursor: pointer; }
-  button.live { background: #c23b3b; }
-  .status { font-size: 15px; color: #888; min-height: 20px; }
-  .captions {
-    text-align: left; font-size: 17px; line-height: 1.5;
-    background: rgba(128,128,128,.1); border-radius: 12px; padding: 14px;
-    min-height: 120px; max-height: 45vh; overflow-y: auto; white-space: pre-wrap;
-  }
-  .err { color: #c23b3b; font-size: 14px; min-height: 18px; }
-  .pulse { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #2e9e5b;
-    animation: pulse 1.2s infinite; margin-right: 6px; vertical-align: middle; }
-  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+  .mini-brand { display: flex; align-items: center; gap: 8px; align-self: center; }
+  .mini-brand .flame { width: 24px; height: 24px; animation: none; }
+  .mini-brand span { font-weight: 700; font-size: 14px; color: var(--muted); }
+  .session-title { font-size: 24px; font-weight: 700; text-align: center; margin: 0; }
+  .session-sub { color: var(--faint); font-size: 13px; text-align: center; margin: 0; letter-spacing: 0.3px; }
+  .listen-card { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
+  .listen-instr { font-size: 13px; color: var(--muted); text-align: center; margin: 0 0 2px; }
+  .listen-btn { font-size: 18px; padding: 18px; }
+  .captions-card { width: 100%; }
+  .captions-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
+    color: var(--faint); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 10px; }
+  .captions-body { font-size: 18px; line-height: 1.6; color: var(--ink); min-height: 90px;
+    max-height: 42vh; overflow-y: auto; white-space: pre-wrap; }
+  .captions-body.placeholder { color: var(--faint); font-style: italic; font-size: 15px; }
 </style>
 </head>
 <body>
-  <h1 id="title">Live translation</h1>
-  <p class="sub" id="sessionInfo"></p>
-  <select id="lang"><option value="">Choose your language…</option></select>
-  <button id="toggle" disabled>Tap to listen</button>
-  <div class="status" id="status"></div>
-  <div class="captions" id="captions">Captions will appear here.</div>
-  <div class="err" id="err"></div>
+  <div class="wrap">
+    <div class="mini-brand">
+      <svg class="flame" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs><linearGradient id="fl" x1="32" y1="3" x2="32" y2="61" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#ffe9a8"/><stop offset=".5" stop-color="#ffb24a"/><stop offset="1" stop-color="#ff5b6e"/></linearGradient></defs>
+        <path d="M33 3c3 12 16 16 16 33a17 17 0 1 1-34 0c0-8 4-11 7-14-1 5 2 8 4 8-3-9 4-14 0-21 4 3 9 6 9 13 3-3 4-8-2-19z" fill="url(#fl)"/>
+      </svg>
+      <span>Glossolalia</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <h1 class="session-title" id="title">Live translation</h1>
+    <p class="session-sub" id="sessionInfo"></p>
+
+    <div class="card listen-card">
+      <p class="listen-instr">Put in your earphones, then choose your language</p>
+      <select id="lang" class="input"><option value="">Choose your language…</option></select>
+      <button id="toggle" class="btn btn-flame listen-btn" disabled>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+        <span id="toggleLabel">Tap to listen</span>
+      </button>
+      <div class="pill" id="status" style="align-self:center; visibility:hidden"><span class="dot"></span><span>Idle</span></div>
+    </div>
+
+    <div class="card captions-card">
+      <div class="captions-head">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 12h4M14 12h4M6 15h8"/></svg>
+        Captions
+      </div>
+      <div class="captions-body placeholder" id="captions">Captions will appear here once the speaker begins.</div>
+    </div>
+
+    <div class="err" id="err"></div>
+    <div class="spacer"></div>
+    <p class="footer-note">Translated live by Gemini · audio may lag a few seconds</p>
+  </div>
 
 <script>
 const sessionId = location.pathname.split('/').pop();
 const langSel = document.getElementById('lang');
 const toggleBtn = document.getElementById('toggle');
+const toggleLabel = document.getElementById('toggleLabel');
 const statusEl = document.getElementById('status');
 const captionsEl = document.getElementById('captions');
 const errEl = document.getElementById('err');
 
 const LANG_KEY = 'glossolalia.lang';
+
+function setStatus(kind, text) {
+  if (kind === 'hidden') { statusEl.style.visibility = 'hidden'; return; }
+  statusEl.style.visibility = 'visible';
+  if (kind === 'listening') {
+    statusEl.innerHTML = '<span class="eq"><span></span><span></span><span></span><span></span></span><span>' + text + '</span>';
+  } else {
+    const cls = kind === 'offline' ? 'dot warn' : kind === 'ended' ? 'dot off' : 'dot';
+    statusEl.innerHTML = '<span class="' + cls + '"></span><span>' + text + '</span>';
+  }
+}
 
 async function init() {
   const [sessRes, langRes] = await Promise.all([
@@ -102,26 +137,26 @@ function playChunk(int16) {
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws/listener/${sessionId}?lang=${encodeURIComponent(langSel.value)}`);
-  ws.onopen = () => { errEl.textContent = ''; statusEl.innerHTML = '<span class="pulse"></span>Listening'; };
+  ws.onopen = () => { errEl.textContent = ''; setStatus('listening', 'Listening'); };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'audio') {
       playChunk(base64ToInt16(msg.data));
     } else if (msg.type === 'transcript' && msg.kind === 'output') {
-      if (!captionsStarted) { captionsEl.textContent = ''; captionsStarted = true; }
+      if (!captionsStarted) { captionsEl.textContent = ''; captionsEl.classList.remove('placeholder'); captionsStarted = true; }
       captionsEl.textContent += msg.text;
       captionsEl.scrollTop = captionsEl.scrollHeight;
     } else if (msg.type === 'status') {
-      if (msg.state === 'speaker-offline') statusEl.textContent = 'Speaker reconnecting…';
-      if (msg.state === 'speaker-online') statusEl.innerHTML = '<span class="pulse"></span>Listening';
-      if (msg.state === 'ended') { statusEl.textContent = 'The session has ended.'; stop(false); }
+      if (msg.state === 'speaker-offline') setStatus('offline', 'Speaker reconnecting…');
+      if (msg.state === 'speaker-online') setStatus('listening', 'Listening');
+      if (msg.state === 'ended') { setStatus('ended', 'The session has ended'); stop(false); }
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
     }
   };
   ws.onclose = () => {
     if (listening) {
-      statusEl.textContent = 'Reconnecting…';
+      setStatus('offline', 'Reconnecting…');
       setTimeout(() => { if (listening) connect(); }, 1500);
     }
   };
@@ -135,8 +170,10 @@ function start() {
   localStorage.setItem(LANG_KEY, langSel.value);
   listening = true;
   langSel.disabled = true;
-  toggleBtn.textContent = 'Stop listening';
-  toggleBtn.classList.add('live');
+  toggleLabel.textContent = 'Stop listening';
+  toggleBtn.classList.remove('btn-flame');
+  toggleBtn.classList.add('btn-live');
+  setStatus('connecting', 'Connecting…');
   connect();
 }
 
@@ -146,9 +183,11 @@ function stop(closeWs = true) {
   if (audioCtx) audioCtx.close();
   ws = audioCtx = null;
   langSel.disabled = false;
-  toggleBtn.textContent = 'Tap to listen';
-  toggleBtn.classList.remove('live');
-  if (statusEl.textContent !== 'The session has ended.') statusEl.textContent = '';
+  toggleLabel.textContent = 'Tap to listen';
+  toggleBtn.classList.remove('btn-live');
+  toggleBtn.classList.add('btn-flame');
+  if (statusEl.querySelector('.off')) return; // keep "ended" message
+  setStatus('hidden');
 }
 
 toggleBtn.onclick = () => (listening ? stop() : start());

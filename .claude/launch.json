@@ -1,0 +1,16 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "glossolalia-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/index.js"],
+      "cwd": "server",
+      "port": 8090,
+      "env": {
+        "GEMINI_API_KEY": "dummy-preview-key",
+        "PORT": "8090"
+      }
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+/* Glossolalia — shared design system.
+   Theme: Pentecost "tongues of fire" — deep indigo night with warm flame accents. */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --bg-0: #0d0a1c;
+  --bg-1: #170f31;
+  --ink: #f5f3fc;
+  --muted: #aaa2cc;
+  --faint: #7d76a0;
+
+  --brand: #8b7bf0;
+  --brand-2: #6d5dd3;
+  --flame-1: #ffd479;
+  --flame-2: #ff8a3d;
+  --flame-3: #ff5b6e;
+
+  --good: #46e08a;
+  --live: #ff5c6c;
+
+  --card: rgba(255, 255, 255, 0.055);
+  --card-brd: rgba(255, 255, 255, 0.11);
+  --card-brd-soft: rgba(255, 255, 255, 0.07);
+
+  --r-lg: 24px;
+  --r-md: 16px;
+  --r-sm: 12px;
+  --shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.7);
+  --maxw: 460px;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: 'Plus Jakarta Sans', -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(139, 123, 240, 0.25), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(255, 138, 61, 0.12), transparent 55%),
+    linear-gradient(180deg, var(--bg-1), var(--bg-0) 60%);
+  background-attachment: fixed;
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 28px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  min-height: 100dvh;
+}
+
+/* Brand lockup */
+.brand { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.flame {
+  width: 56px; height: 56px;
+  filter: drop-shadow(0 6px 18px rgba(255, 138, 61, 0.45));
+  animation: flicker 3.2s ease-in-out infinite;
+}
+@keyframes flicker {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.04); }
+}
+.brand-name {
+  font-size: 30px; font-weight: 800; letter-spacing: -0.5px; margin: 0;
+  background: linear-gradient(180deg, #fff, #d7cffb);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.brand-tag { margin: 0; color: var(--muted); font-size: 14px; font-weight: 500; }
+
+/* Cards */
+.card {
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--card-brd);
+  border-radius: var(--r-lg);
+  padding: 22px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+}
+
+/* Inputs */
+label.field-label {
+  display: block; font-size: 12px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.6px; margin: 0 0 7px 2px;
+}
+.input, select.input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 17px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--card-brd);
+  border-radius: var(--r-md);
+  padding: 15px 16px;
+  outline: none;
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+}
+.input::placeholder { color: var(--faint); }
+.input:focus, select.input:focus {
+  border-color: var(--brand);
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 0 0 4px rgba(139, 123, 240, 0.18);
+}
+select.input {
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' fill='none' stroke='%23aaa2cc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 14px center;
+  padding-right: 44px;
+}
+select.input option { color: #16122b; }
+
+/* Buttons */
+.btn {
+  width: 100%;
+  font-family: inherit;
+  font-size: 17px; font-weight: 700;
+  color: #fff;
+  border: none;
+  border-radius: var(--r-md);
+  padding: 16px 20px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  transition: transform 0.12s ease, filter 0.18s, opacity 0.18s;
+}
+.btn:active { transform: translateY(1px) scale(0.995); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn-primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: 0 12px 30px -12px rgba(109, 93, 211, 0.9); }
+.btn-flame { background: linear-gradient(135deg, var(--flame-1), var(--flame-2)); color: #2a1605; box-shadow: 0 12px 30px -12px rgba(255, 138, 61, 0.85); }
+.btn-live { background: linear-gradient(135deg, #ff7a87, var(--live)); box-shadow: 0 12px 30px -12px rgba(255, 92, 108, 0.85); }
+.btn-ghost { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--card-brd); color: var(--muted); font-weight: 600; }
+
+.hint { font-size: 13px; color: var(--faint); text-align: center; line-height: 1.5; max-width: 340px; }
+
+/* Status pill */
+.pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 600; color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--card-brd-soft);
+  padding: 8px 14px; border-radius: 999px;
+  min-height: 36px;
+}
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
+.dot.live { background: var(--good); box-shadow: 0 0 0 0 rgba(70, 224, 138, 0.6); animation: pulse 1.4s infinite; }
+.dot.warn { background: var(--flame-2); }
+.dot.off { background: var(--live); }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(70, 224, 138, 0.55); }
+  70% { box-shadow: 0 0 0 9px rgba(70, 224, 138, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(70, 224, 138, 0); }
+}
+
+.err {
+  color: #ffb4bc; font-size: 13.5px; text-align: center; min-height: 18px; line-height: 1.45;
+}
+
+.spacer { flex: 1; }
+.footer-note { font-size: 12px; color: var(--faint); text-align: center; }
+
+/* Equalizer (listening animation) */
+.eq { display: inline-flex; align-items: flex-end; gap: 3px; height: 16px; }
+.eq span { width: 3px; background: var(--good); border-radius: 2px; height: 5px; animation: eq 1s ease-in-out infinite; }
+.eq span:nth-child(2) { animation-delay: 0.15s; }
+.eq span:nth-child(3) { animation-delay: 0.3s; }
+.eq span:nth-child(4) { animation-delay: 0.45s; }
+@keyframes eq { 0%, 100% { height: 5px; } 50% { height: 16px; } }

@@ -2,59 +2,127 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Speaker — Glossolalia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="/styles.css">
 <style>
-  :root { color-scheme: light dark; }
-  body {
-    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-    max-width: 520px; margin: 0 auto; padding: 24px;
-    display: flex; flex-direction: column; gap: 14px; align-items: center; text-align: center;
+  .mini-brand { display: flex; align-items: center; gap: 8px; align-self: center; }
+  .mini-brand .flame { width: 26px; height: 26px; animation: none; }
+  .mini-brand span { font-weight: 700; font-size: 15px; color: var(--muted); letter-spacing: 0.2px; }
+  .session-title { font-size: 22px; font-weight: 700; text-align: center; margin: 0; }
+  .qr-card { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .qr-frame {
+    background: #fff; border-radius: var(--r-md); padding: 14px; line-height: 0;
+    box-shadow: 0 14px 40px -18px rgba(0,0,0,.8);
   }
-  h1 { margin: 0; font-size: 22px; }
-  .code { font-size: 32px; letter-spacing: 6px; font-weight: 700; }
-  img.qr { width: 260px; height: 260px; border-radius: 12px; background: white; padding: 8px; }
-  .url { font-size: 14px; color: #888; word-break: break-all; }
-  button {
-    font-size: 18px; padding: 14px 28px; border-radius: 12px; border: none;
-    background: #2e9e5b; color: white; font-weight: 600; cursor: pointer; width: 100%;
-  }
-  button.live { background: #c23b3b; }
-  .stats { font-size: 15px; color: #888; min-height: 20px; }
-  .transcript {
-    width: 100%; min-height: 80px; max-height: 200px; overflow-y: auto;
-    text-align: left; font-size: 15px; background: rgba(128,128,128,.1);
-    border-radius: 12px; padding: 12px; box-sizing: border-box; white-space: pre-wrap;
-  }
-  .err { color: #c23b3b; font-size: 14px; min-height: 18px; }
+  .qr-frame img { width: 216px; height: 216px; display: block; border-radius: 6px; }
+  .code-row { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .code-label { font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--faint); }
+  .code-value { font-size: 30px; font-weight: 800; letter-spacing: 7px; padding-left: 7px;
+    background: linear-gradient(135deg,#fff,#c9bdf7); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .copy-btn { font-size: 13px; padding: 9px 14px; width: auto; }
+  .copied { color: var(--good) !important; }
+  .stat-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+  .stat-big { font-size: 17px; font-weight: 700; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+  .chip { font-size: 12px; font-weight: 600; color: var(--ink); background: rgba(139,123,240,.18);
+    border: 1px solid rgba(139,123,240,.3); padding: 4px 10px; border-radius: 999px; }
+  .transcript-card { width: 100%; }
+  .transcript-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
+    color: var(--faint); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 10px; }
+  .transcript-body { font-size: 15.5px; line-height: 1.6; color: var(--ink); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+  .transcript-body.placeholder { color: var(--faint); font-style: italic; }
 </style>
 </head>
 <body>
-  <h1 id="title">Speaker</h1>
-  <div class="code" id="code"></div>
-  <img class="qr" id="qr" alt="QR code to join">
-  <div class="url" id="joinUrl"></div>
-  <button id="toggle">Start speaking</button>
-  <div class="stats" id="stats">No listeners yet</div>
-  <div class="transcript" id="transcript">Live transcript of what the model hears will appear here (once at least one listener has joined).</div>
-  <div class="err" id="err"></div>
+  <div class="wrap">
+    <div class="mini-brand">
+      <svg class="flame" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs><linearGradient id="fl" x1="32" y1="3" x2="32" y2="61" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#ffe9a8"/><stop offset=".5" stop-color="#ffb24a"/><stop offset="1" stop-color="#ff5b6e"/></linearGradient></defs>
+        <path d="M33 3c3 12 16 16 16 33a17 17 0 1 1-34 0c0-8 4-11 7-14-1 5 2 8 4 8-3-9 4-14 0-21 4 3 9 6 9 13 3-3 4-8-2-19z" fill="url(#fl)"/>
+      </svg>
+      <span>Glossolalia</span>
+    </div>
+
+    <h1 class="session-title" id="title">Speaker</h1>
+    <div class="pill" id="statusPill"><span class="dot" id="statusDot"></span><span id="statusText">Microphone paused</span></div>
+
+    <div class="card qr-card">
+      <div class="qr-frame"><img id="qr" alt="QR code to join"></div>
+      <div class="code-row">
+        <span class="code-label">Session code</span>
+        <span class="code-value" id="code"></span>
+      </div>
+      <button class="btn btn-ghost copy-btn" id="copyBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <span id="copyLabel">Copy join link</span>
+      </button>
+      <span class="footer-note" id="joinUrl"></span>
+    </div>
+
+    <button id="toggle" class="btn btn-flame">
+      <svg id="micIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+      <span id="toggleLabel">Start speaking</span>
+    </button>
+
+    <div class="stat-row">
+      <span class="stat-big" id="stats">No listeners yet</span>
+    </div>
+    <div class="chips" id="chips"></div>
+
+    <div class="card transcript-card">
+      <div class="transcript-head">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M3 12h18M3 19h12"/></svg>
+        What the model hears
+      </div>
+      <div class="transcript-body placeholder" id="transcript">The live transcript appears here once a listener has joined.</div>
+    </div>
+
+    <div class="err" id="err"></div>
+    <div class="spacer"></div>
+    <button class="btn btn-ghost" id="endBtn" style="max-width:200px">End session</button>
+  </div>
 
 <script>
 const sessionId = location.pathname.split('/').pop();
 const codeEl = document.getElementById('code');
 const errEl = document.getElementById('err');
 const statsEl = document.getElementById('stats');
+const chipsEl = document.getElementById('chips');
 const transcriptEl = document.getElementById('transcript');
 const toggleBtn = document.getElementById('toggle');
+const toggleLabel = document.getElementById('toggleLabel');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const joinUrlEl = document.getElementById('joinUrl');
 
+const joinLink = `${location.origin}/join/${sessionId}`;
 codeEl.textContent = sessionId;
 document.getElementById('qr').src = `/api/sessions/${sessionId}/qr.png`;
-document.getElementById('joinUrl').textContent = `${location.origin}/join/${sessionId}`;
+joinUrlEl.textContent = joinLink.replace(/^https?:\/\//, '');
 
 fetch(`/api/sessions/${sessionId}`).then(r => {
   if (!r.ok) { errEl.textContent = 'Session not found — go back and start a new one.'; toggleBtn.disabled = true; }
   return r.json();
-}).then(d => { if (d && d.title) document.getElementById('title').textContent = d.title; });
+}).then(d => { if (d && d.title) document.getElementById('title').textContent = d.title; }).catch(() => {});
+
+document.getElementById('copyBtn').onclick = async () => {
+  const label = document.getElementById('copyLabel');
+  try {
+    await navigator.clipboard.writeText(joinLink);
+    label.textContent = 'Copied!';
+    label.classList.add('copied');
+    setTimeout(() => { label.textContent = 'Copy join link'; label.classList.remove('copied'); }, 1600);
+  } catch { errEl.textContent = joinLink; }
+};
+
+function setStatus(state) {
+  statusDot.className = 'dot' + (state === 'live' ? ' live' : '');
+  statusText.textContent = state === 'live' ? 'Live — translating' : state === 'connecting' ? 'Connecting…' : 'Microphone paused';
+}
 
 let ws = null, audioCtx = null, workletNode = null, mediaStream = null;
 let transcriptStarted = false;
@@ -110,30 +178,40 @@ function connectWs() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'stats') {
-      const parts = Object.entries(msg.listeners).map(([l, n]) => `${l}: ${n}`);
-      statsEl.textContent = msg.total === 0 ? 'No listeners yet' : `${msg.total} listening — ${parts.join(', ')}`;
+      statsEl.textContent = msg.total === 0 ? 'No listeners yet' : `${msg.total} listening`;
+      chipsEl.innerHTML = '';
+      for (const [l, n] of Object.entries(msg.listeners)) {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = `${l} · ${n}`;
+        chipsEl.appendChild(chip);
+      }
     } else if (msg.type === 'transcript' && msg.kind === 'input') {
-      if (!transcriptStarted) { transcriptEl.textContent = ''; transcriptStarted = true; }
+      if (!transcriptStarted) { transcriptEl.textContent = ''; transcriptEl.classList.remove('placeholder'); transcriptStarted = true; }
       transcriptEl.textContent += msg.text;
       transcriptEl.scrollTop = transcriptEl.scrollHeight;
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
     }
   };
-  ws.onclose = () => { if (running) errEl.textContent = 'Connection lost — reconnecting…'; if (running) setTimeout(connectWs, 1500); };
-  ws.onopen = () => { errEl.textContent = ''; };
+  ws.onclose = () => {
+    if (running) { errEl.textContent = 'Connection lost — reconnecting…'; setStatus('connecting'); setTimeout(connectWs, 1500); }
+  };
+  ws.onopen = () => { errEl.textContent = ''; if (running) setStatus('live'); };
 }
 
 let running = false;
 
 async function start() {
   errEl.textContent = '';
+  setStatus('connecting');
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
     });
   } catch (e) {
     errEl.textContent = 'Microphone access denied. Note: browsers only allow the mic on https or on localhost.';
+    setStatus('paused');
     return;
   }
   audioCtx = new AudioContext();
@@ -149,8 +227,9 @@ async function start() {
   source.connect(workletNode);
   connectWs();
   running = true;
-  toggleBtn.textContent = 'Stop speaking';
-  toggleBtn.classList.add('live');
+  toggleLabel.textContent = 'Stop speaking';
+  toggleBtn.classList.remove('btn-flame');
+  toggleBtn.classList.add('btn-live');
 }
 
 function stop() {
@@ -160,11 +239,20 @@ function stop() {
   if (audioCtx) audioCtx.close();
   if (ws) ws.close();
   workletNode = mediaStream = audioCtx = ws = null;
-  toggleBtn.textContent = 'Start speaking';
-  toggleBtn.classList.remove('live');
+  toggleLabel.textContent = 'Start speaking';
+  toggleBtn.classList.remove('btn-live');
+  toggleBtn.classList.add('btn-flame');
+  setStatus('paused');
 }
 
 toggleBtn.onclick = () => (running ? stop() : start());
+
+document.getElementById('endBtn').onclick = () => {
+  if (!confirm('End this session for everyone listening?')) return;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'end' }));
+  stop();
+  location.href = '/';
+};
 </script>
 </body>
 </html>
