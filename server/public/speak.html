@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Speaker — Glossolalia</title>
+<title>Speaker — Glotta</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="/styles.css">
 <style>
   .mini-brand { display: flex; align-items: center; gap: 8px; align-self: center; }
-  .mini-brand .flame { width: 26px; height: 26px; animation: none; }
+  .mini-brand .logo { width: 26px; height: 26px; animation: none; }
   .mini-brand span { font-weight: 700; font-size: 15px; color: var(--muted); letter-spacing: 0.2px; }
   .session-title { font-size: 22px; font-weight: 700; text-align: center; margin: 0; }
   .qr-card { display: flex; flex-direction: column; align-items: center; gap: 16px; }
@@ -39,12 +40,20 @@
 <body>
   <div class="wrap">
     <div class="mini-brand">
-      <svg class="flame" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <defs><linearGradient id="fl" x1="32" y1="3" x2="32" y2="61" gradientUnits="userSpaceOnUse">
-          <stop stop-color="#ffe9a8"/><stop offset=".5" stop-color="#ffb24a"/><stop offset="1" stop-color="#ff5b6e"/></linearGradient></defs>
-        <path d="M33 3c3 12 16 16 16 33a17 17 0 1 1-34 0c0-8 4-11 7-14-1 5 2 8 4 8-3-9 4-14 0-21 4 3 9 6 9 13 3-3 4-8-2-19z" fill="url(#fl)"/>
+      <svg class="logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs><linearGradient id="g" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#9b86ff"/><stop offset=".55" stop-color="#56c8f5"/><stop offset="1" stop-color="#54e3c6"/></linearGradient></defs>
+        <rect x="7" y="8" width="50" height="37" rx="13" fill="url(#g)"/>
+        <path d="M20 41 L15 55 L31 43 Z" fill="url(#g)"/>
+        <g fill="#fff">
+          <rect x="15.75" y="21" width="4.5" height="10" rx="2.25"/>
+          <rect x="22.75" y="17" width="4.5" height="18" rx="2.25"/>
+          <rect x="29.75" y="14" width="4.5" height="24" rx="2.25"/>
+          <rect x="36.75" y="17" width="4.5" height="18" rx="2.25"/>
+          <rect x="43.75" y="21" width="4.5" height="10" rx="2.25"/>
+        </g>
       </svg>
-      <span>Glossolalia</span>
+      <span>Glotta</span>
     </div>
 
     <h1 class="session-title" id="title">Speaker</h1>
@@ -63,7 +72,7 @@
       <span class="footer-note" id="joinUrl"></span>
     </div>
 
-    <button id="toggle" class="btn btn-flame">
+    <button id="toggle" class="btn btn-accent">
       <svg id="micIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
       <span id="toggleLabel">Start speaking</span>
     </button>
@@ -228,7 +237,7 @@ async function start() {
   connectWs();
   running = true;
   toggleLabel.textContent = 'Stop speaking';
-  toggleBtn.classList.remove('btn-flame');
+  toggleBtn.classList.remove('btn-accent');
   toggleBtn.classList.add('btn-live');
 }
 
@@ -241,7 +250,7 @@ function stop() {
   workletNode = mediaStream = audioCtx = ws = null;
   toggleLabel.textContent = 'Start speaking';
   toggleBtn.classList.remove('btn-live');
-  toggleBtn.classList.add('btn-flame');
+  toggleBtn.classList.add('btn-accent');
   setStatus('paused');
 }
 

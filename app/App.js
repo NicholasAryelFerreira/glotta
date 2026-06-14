@@ -63,7 +63,7 @@ export default function App() {
   const createSession = useCallback(async () => {
     const base = serverUrl.trim().replace(/\/+$/, '');
     if (!base) {
-      Alert.alert('Server address required', 'Enter the address of your Glossolalia server.');
+      Alert.alert('Server address required', 'Enter the address of your Glotta server.');
       return;
     }
     setCreating(true);
@@ -179,7 +179,7 @@ export default function App() {
       >
         <StatusBar style="auto" />
         <View style={styles.center}>
-          <Text style={styles.brand}>Glossolalia</Text>
+          <Text style={styles.brand}>Glotta</Text>
           <Text style={styles.subtitle}>Live sermon translation</Text>
 
           <Text style={styles.label}>Session title</Text>

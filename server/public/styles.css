@@ -1,22 +1,24 @@
-/* Glossolalia — shared design system.
-   Theme: Pentecost "tongues of fire" — deep indigo night with warm flame accents. */
+/* Glotta — shared design system.
+   Theme: language & voice carried across — deep indigo night with a cool
+   violet-to-cyan "translation" gradient. */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 :root {
-  --bg-0: #0d0a1c;
-  --bg-1: #170f31;
-  --ink: #f5f3fc;
-  --muted: #aaa2cc;
-  --faint: #7d76a0;
+  --bg-0: #0c0a1b;
+  --bg-1: #15102e;
+  --ink: #f4f3fc;
+  --muted: #a9a2cc;
+  --faint: #7b749e;
 
   --brand: #8b7bf0;
   --brand-2: #6d5dd3;
-  --flame-1: #ffd479;
-  --flame-2: #ff8a3d;
-  --flame-3: #ff5b6e;
+  --acc-1: #9b86ff;   /* violet  */
+  --acc-2: #56c8f5;   /* sky     */
+  --acc-3: #54e3c6;   /* mint    */
 
   --good: #46e08a;
   --live: #ff5c6c;
+  --warn: #f5b94a;
 
   --card: rgba(255, 255, 255, 0.055);
   --card-brd: rgba(255, 255, 255, 0.11);
@@ -38,8 +40,8 @@ body {
   font-family: 'Plus Jakarta Sans', -apple-system, 'Segoe UI', Roboto, sans-serif;
   color: var(--ink);
   background:
-    radial-gradient(1200px 600px at 50% -10%, rgba(139, 123, 240, 0.25), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(255, 138, 61, 0.12), transparent 55%),
+    radial-gradient(1200px 600px at 50% -10%, rgba(139, 123, 240, 0.26), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(86, 200, 245, 0.14), transparent 55%),
     linear-gradient(180deg, var(--bg-1), var(--bg-0) 60%);
   background-attachment: fixed;
   min-height: 100dvh;
@@ -59,18 +61,18 @@ body {
 
 /* Brand lockup */
 .brand { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
-.flame {
-  width: 56px; height: 56px;
-  filter: drop-shadow(0 6px 18px rgba(255, 138, 61, 0.45));
-  animation: flicker 3.2s ease-in-out infinite;
+.logo {
+  width: 58px; height: 58px;
+  filter: drop-shadow(0 8px 20px rgba(86, 200, 245, 0.35));
+  animation: float 4s ease-in-out infinite;
 }
-@keyframes flicker {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(-2px) scale(1.04); }
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
 }
 .brand-name {
   font-size: 30px; font-weight: 800; letter-spacing: -0.5px; margin: 0;
-  background: linear-gradient(180deg, #fff, #d7cffb);
+  background: linear-gradient(180deg, #fff, #d3ddfb);
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 .brand-tag { margin: 0; color: var(--muted); font-size: 14px; font-weight: 500; }
@@ -112,7 +114,7 @@ label.field-label {
 }
 select.input {
   appearance: none; -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' fill='none' stroke='%23aaa2cc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' fill='none' stroke='%23a9a2cc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 14px center;
   padding-right: 44px;
 }
@@ -134,7 +136,7 @@ select.input option { color: #16122b; }
 .btn:active { transform: translateY(1px) scale(0.995); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn-primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: 0 12px 30px -12px rgba(109, 93, 211, 0.9); }
-.btn-flame { background: linear-gradient(135deg, var(--flame-1), var(--flame-2)); color: #2a1605; box-shadow: 0 12px 30px -12px rgba(255, 138, 61, 0.85); }
+.btn-accent { background: linear-gradient(135deg, var(--acc-1), var(--acc-2)); color: #0c1830; box-shadow: 0 12px 30px -12px rgba(86, 200, 245, 0.8); }
 .btn-live { background: linear-gradient(135deg, #ff7a87, var(--live)); box-shadow: 0 12px 30px -12px rgba(255, 92, 108, 0.85); }
 .btn-ghost { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--card-brd); color: var(--muted); font-weight: 600; }
 
@@ -151,7 +153,7 @@ select.input option { color: #16122b; }
 }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
 .dot.live { background: var(--good); box-shadow: 0 0 0 0 rgba(70, 224, 138, 0.6); animation: pulse 1.4s infinite; }
-.dot.warn { background: var(--flame-2); }
+.dot.warn { background: var(--warn); }
 .dot.off { background: var(--live); }
 @keyframes pulse {
   0% { box-shadow: 0 0 0 0 rgba(70, 224, 138, 0.55); }

@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "glossolalia-server",
+      "name": "glotta-server",
       "runtimeExecutable": "node",
       "runtimeArgs": ["src/index.js"],
       "cwd": "server",

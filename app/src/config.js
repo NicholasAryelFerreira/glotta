@@ -1,4 +1,4 @@
-// Default address of the Glossolalia relay server.
+// Default address of the Glotta relay server.
 //
 // During development this should be the LAN address printed by the server on
 // startup (e.g. "Network: http://192.168.1.36:8080"). The phone and the

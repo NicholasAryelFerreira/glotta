@@ -1,7 +1,7 @@
 {
-  "name": "glossolalia-server",
+  "name": "glotta-server",
   "version": "0.1.0",
-  "description": "Relay server for Glossolalia live sermon translation (Gemini Live Translate)",
+  "description": "Relay server for Glotta live sermon translation (Gemini Live Translate)",
   "type": "module",
   "main": "src/index.js",
   "engines": {

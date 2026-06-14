@@ -169,7 +169,7 @@ server.listen(PORT, () => {
     .flat()
     .filter((n) => n && n.family === 'IPv4' && !n.internal)
     .map((n) => n.address);
-  console.log(`Glossolalia server listening on port ${PORT}`);
+  console.log(`Glotta server listening on port ${PORT}`);
   console.log(`  Local:   http://localhost:${PORT}`);
   for (const ip of lanIps) console.log(`  Network: http://${ip}:${PORT}`);
 });

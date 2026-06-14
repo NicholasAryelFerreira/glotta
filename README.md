@@ -1,7 +1,11 @@
-# Glossolalia
+# Glotta
 
 Real-time translation of live sermons, powered by Google's
 `gemini-3.5-live-translate-preview` model.
+
+> The GitHub repo is **glotta**. Your local working folder may still be named
+> `Glossolalia` — the `cd` paths below reflect that. If you rename the folder,
+> adjust those paths accordingly.
 
 - **Speaker** opens the iOS app, starts a session, and speaks. Their voice is
   streamed to a relay server.
@@ -69,7 +73,7 @@ All commands below run in **PowerShell**.
    ```
    You'll see something like:
    ```
-   Glossolalia server listening on port 8080
+   Glotta server listening on port 8080
      Local:   http://localhost:8080
      Network: http://192.168.1.36:8080
    ```
