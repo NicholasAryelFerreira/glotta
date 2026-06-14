@@ -1,15 +1,12 @@
 # Render Blueprint — deploys the Glotta relay server.
 # Render reads this automatically when you create a Blueprint from the repo.
 #
-# NOTE: the service `name` below is kept as "glossolalia" on purpose — it is the
-# identity of the already-deployed Render service and its public URL
-# (glossolalia.onrender.com). Renaming it here would make Render create a NEW
-# service and you'd have to re-enter GEMINI_API_KEY. To rebrand the URL to
-# glotta.onrender.com, create a fresh Blueprint with name: glotta and delete the
-# old service.
+# The service `name` is "glotta", so the public URL is glotta.onrender.com.
+# Create a new Blueprint from this repo, set GEMINI_API_KEY when prompted, and
+# (once it is Live) delete the old "glossolalia" service in the dashboard.
 services:
   - type: web
-    name: glossolalia
+    name: glotta
     runtime: node
     plan: free
     rootDir: server
