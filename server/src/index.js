@@ -12,10 +12,18 @@ import { LANGUAGES, isSupportedLanguage } from './languages.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const API_KEY = process.env.GEMINI_API_KEY;
+// Shared passcode required to *create* a session (i.e. to be the speaker), so
+// strangers who find the public URL can't spin up sessions on our Gemini key.
+// If unset, creation is open (e.g. for local development).
+const CREATE_PASSWORD = process.env.PASSWORD;
 
 if (!API_KEY) {
   console.error('Missing GEMINI_API_KEY. Copy .env.example to .env and set your key.');
   process.exit(1);
+}
+
+if (!CREATE_PASSWORD) {
+  console.warn('No PASSWORD set — anyone can create a session. Set PASSWORD to require a passcode.');
 }
 
 // If the speaker drops (network blip, app backgrounded, page refresh), keep the
@@ -41,7 +49,10 @@ app.get('/api/languages', (_req, res) => {
 });
 
 app.post('/api/sessions', (req, res) => {
-  const { title, echoTargetLanguage } = req.body || {};
+  const { title, echoTargetLanguage, password } = req.body || {};
+  if (CREATE_PASSWORD && password !== CREATE_PASSWORD) {
+    return res.status(401).json({ error: 'Incorrect password' });
+  }
   const session = manager.create({ title, echoTargetLanguage });
   res.json({
     sessionId: session.id,

@@ -34,6 +34,8 @@
     <div class="card">
       <label class="field-label" for="title">Session name</label>
       <input id="title" class="input" placeholder="Sunday Service" autocomplete="off">
+      <label class="field-label" for="pwd" style="margin-top:14px">Password</label>
+      <input id="pwd" class="input" type="password" placeholder="Enter password" autocomplete="off">
       <button id="start" class="btn btn-primary" style="margin-top:18px">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"/></svg>
         Start a session
@@ -49,25 +51,41 @@
 <script>
 const startBtn = document.getElementById('start');
 const errEl = document.getElementById('err');
+const pwdEl = document.getElementById('pwd');
+const PWD_KEY = 'glotta.pwd';
+
+// Remember the passcode on this device so the church only types it once.
+pwdEl.value = localStorage.getItem(PWD_KEY) || '';
+
 startBtn.onclick = async () => {
   const title = document.getElementById('title').value.trim();
+  const password = pwdEl.value;
   startBtn.disabled = true;
   errEl.textContent = '';
   try {
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, password }),
     });
+    if (res.status === 401) {
+      errEl.textContent = 'Incorrect password.';
+      localStorage.removeItem(PWD_KEY);
+      startBtn.disabled = false;
+      return;
+    }
     if (!res.ok) throw new Error('Server error ' + res.status);
     const data = await res.json();
+    localStorage.setItem(PWD_KEY, password); // worked — remember it
     location.href = '/speak/' + data.sessionId;
   } catch (e) {
     errEl.textContent = 'Could not start a session. Please try again.';
     startBtn.disabled = false;
   }
 };
-document.getElementById('title').addEventListener('keydown', (e) => { if (e.key === 'Enter') startBtn.click(); });
+const submitOnEnter = (e) => { if (e.key === 'Enter') startBtn.click(); };
+document.getElementById('title').addEventListener('keydown', submitOnEnter);
+pwdEl.addEventListener('keydown', submitOnEnter);
 </script>
 </body>
 </html>
