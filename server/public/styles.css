@@ -34,6 +34,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body { height: 100%; }
+html { background: var(--bg-0); }
 
 body {
   margin: 0;

@@ -108,10 +108,11 @@ async function init() {
   document.getElementById('sessionInfo').textContent = `Session ${sess.sessionId}`;
 
   const { languages } = await langRes.json();
+  languages.sort((a, b) => a.name.localeCompare(b.name));
   for (const l of languages) {
     const opt = document.createElement('option');
     opt.value = l.code;
-    opt.textContent = l.native === l.name ? l.name : `${l.native} (${l.name})`;
+    opt.textContent = l.native === l.name ? l.name : `${l.name} (${l.native})`;
     langSel.appendChild(opt);
   }
   const saved = localStorage.getItem(LANG_KEY);
