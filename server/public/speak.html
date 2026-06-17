@@ -112,10 +112,24 @@ const joinLink = `${location.origin}/join/${sessionId}`;
 document.getElementById('qr').src = `/api/sessions/${sessionId}/qr.png`;
 joinUrlEl.textContent = joinLink.replace(/^https?:\/\//, '');
 
-fetch(`/api/sessions/${sessionId}`).then(r => {
-  if (!r.ok) { errEl.textContent = 'Session not found — go back and start a new one.'; toggleBtn.disabled = true; }
-  return r.json();
-}).then(d => { if (d && d.title) document.getElementById('title').textContent = d.title; }).catch(() => {});
+// Stays true while this page should hold a live connection to the session.
+// Set false only when the session is gone or the speaker ends it, so we never
+// reconnect forever to a dead session.
+let pageActive = true;
+
+fetch(`/api/sessions/${sessionId}`).then(async (r) => {
+  if (!r.ok) {
+    errEl.textContent = 'Session not found — go back and start a new one.';
+    toggleBtn.disabled = true;
+    pageActive = false;
+    return;
+  }
+  const d = await r.json();
+  if (d && d.title) document.getElementById('title').textContent = d.title;
+  // Connect right away so a refresh re-establishes presence and keeps the
+  // session alive even before the mic is (re)started.
+  connectWs();
+}).catch(() => {});
 
 document.getElementById('copyBtn').onclick = async () => {
   const label = document.getElementById('copyLabel');
@@ -200,10 +214,14 @@ function connectWs() {
       transcriptEl.scrollTop = transcriptEl.scrollHeight;
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
+      if (/not found/i.test(msg.message)) pageActive = false; // session is gone — stop reconnecting
     }
   };
   ws.onclose = () => {
-    if (running) { errEl.textContent = 'Connection lost — reconnecting…'; setStatus('connecting'); setTimeout(connectWs, 1500); }
+    ws = null;
+    if (!pageActive) return;
+    if (running) { errEl.textContent = 'Connection lost — reconnecting…'; setStatus('connecting'); }
+    setTimeout(() => { if (pageActive && !ws) connectWs(); }, 1500);
   };
   ws.onopen = () => { errEl.textContent = ''; if (running) setStatus('live'); };
 }
@@ -233,11 +251,12 @@ async function start() {
     }
   };
   source.connect(workletNode);
-  connectWs();
   running = true;
+  if (!ws || ws.readyState !== WebSocket.OPEN) connectWs(); // reuse the presence connection if it's already open
   toggleLabel.textContent = 'Stop speaking';
   toggleBtn.classList.remove('btn-accent');
   toggleBtn.classList.add('btn-live');
+  setStatus(ws && ws.readyState === WebSocket.OPEN ? 'live' : 'connecting');
 }
 
 function stop() {
@@ -245,8 +264,8 @@ function stop() {
   if (workletNode) workletNode.disconnect();
   if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
   if (audioCtx) audioCtx.close();
-  if (ws) ws.close();
-  workletNode = mediaStream = audioCtx = ws = null;
+  workletNode = mediaStream = audioCtx = null;
+  // Keep the WebSocket open: pausing the mic shouldn't drop the session.
   toggleLabel.textContent = 'Start speaking';
   toggleBtn.classList.remove('btn-live');
   toggleBtn.classList.add('btn-accent');
@@ -257,8 +276,10 @@ toggleBtn.onclick = () => (running ? stop() : start());
 
 document.getElementById('endBtn').onclick = () => {
   if (!confirm('End this session for everyone listening?')) return;
+  pageActive = false; // we're leaving on purpose — don't reconnect
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'end' }));
   stop();
+  if (ws) { ws.close(); ws = null; }
   location.href = '/';
 };
 </script>

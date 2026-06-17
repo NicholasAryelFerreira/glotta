@@ -18,9 +18,11 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-// If the speaker drops (network blip, app backgrounded), keep the session
-// alive this long so they can reconnect without every listener losing it.
-const SPEAKER_GRACE_MS = 2 * 60_000;
+// If the speaker drops (network blip, app backgrounded, page refresh), keep the
+// session alive this long so they can reconnect without every listener losing
+// it. The speaker page also re-establishes its connection automatically on
+// load, so this is mainly a cushion for longer outages.
+const SPEAKER_GRACE_MS = 5 * 60_000;
 
 const manager = new SessionManager(API_KEY);
 const app = express();

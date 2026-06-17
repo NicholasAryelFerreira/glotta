@@ -130,6 +130,12 @@ function base64ToInt16(b64) {
   return new Int16Array(bytes.buffer, 0, Math.floor(bytes.length / 2));
 }
 
+// Seconds of audio to keep buffered ahead of playback. A larger cushion rides
+// through brief network stutters (common on phones / venue Wi-Fi) without the
+// listener hearing gaps, at the cost of a little extra delay — unnoticeable
+// against the translation lag that already exists.
+const JITTER_BUFFER_S = 0.2;
+
 function playChunk(int16) {
   if (!audioCtx) return;
   const f32 = new Float32Array(int16.length);
@@ -139,7 +145,7 @@ function playChunk(int16) {
   const src = audioCtx.createBufferSource();
   src.buffer = buf;
   src.connect(audioCtx.destination);
-  const t = Math.max(audioCtx.currentTime + 0.06, nextPlayTime);
+  const t = Math.max(audioCtx.currentTime + JITTER_BUFFER_S, nextPlayTime);
   src.start(t);
   nextPlayTime = t + buf.duration;
 }
