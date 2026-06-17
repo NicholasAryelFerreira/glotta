@@ -126,7 +126,6 @@ const MIC_KEY = 'glotta.mic';
 const BUILTIN_MIC = /built.?in|internal|macbook|imac|realtek|microphone array|laptop|default/i;
 
 const joinLink = `${location.origin}/join/${sessionId}`;
-document.getElementById('qr').src = `/api/sessions/${sessionId}/qr.png`;
 joinUrlEl.textContent = joinLink.replace(/^https?:\/\//, '');
 
 // Stays true while this page should hold a live connection to the session.
@@ -136,13 +135,16 @@ let pageActive = true;
 
 fetch(`/api/sessions/${sessionId}`).then(async (r) => {
   if (!r.ok) {
-    errEl.textContent = 'Session not found — go back and start a new one.';
+    errEl.textContent = 'This session has ended — start a new one from the home page.';
     toggleBtn.disabled = true;
     pageActive = false;
     return;
   }
   const d = await r.json();
   if (d && d.title) document.getElementById('title').textContent = d.title;
+  // Load the QR only once we know the session exists, so a dead session shows
+  // the message above instead of a broken image.
+  document.getElementById('qr').src = `/api/sessions/${sessionId}/qr.png`;
   // Connect right away so a refresh re-establishes presence and keeps the
   // session alive even before the mic is (re)started.
   connectWs();

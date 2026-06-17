@@ -91,7 +91,24 @@ app.get('/speak/:id', (_req, res) => {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
+// Heartbeat: ping every connected browser periodically so idle connections
+// aren't closed by Render's proxy (which was ending sessions when the speaker
+// page sat idle and made the QR vanish on refresh), keep the service warm, and
+// clean up dead sockets. Browsers reply to ping frames automatically, even in a
+// backgrounded tab, so a genuinely-open page stays alive.
+const HEARTBEAT_MS = 30_000;
+const heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) { ws.terminate(); continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch { /* socket already closing */ }
+  }
+}, HEARTBEAT_MS);
+wss.on('close', () => clearInterval(heartbeat));
+
 wss.on('connection', async (ws, req) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   const url = new URL(req.url, 'http://localhost');
   const parts = url.pathname.split('/').filter(Boolean); // e.g. ["ws", "speaker", "ABC123"]
 
