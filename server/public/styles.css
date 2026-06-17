@@ -34,7 +34,10 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body { height: 100%; }
-html { background: var(--bg-0); }
+/* Match the app instead of flashing a mismatched band when the page is
+   over-scrolled (rubber-band). The app's top and bottom are different colors,
+   so a single fill can't match both — disable the bounce instead. */
+html, body { background: var(--bg-0); overscroll-behavior: none; }
 
 body {
   margin: 0;
