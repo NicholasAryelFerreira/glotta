@@ -9,6 +9,7 @@ const MODEL = 'gemini-3.5-live-translate-preview';
 // us send the translation config exactly as documented.
 const API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
 const WS_BASE = 'wss://generativelanguage.googleapis.com';
+const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
 
 /**
  * Wraps one Gemini Live translation session for a single target language.
@@ -164,6 +165,7 @@ export class Translator {
   /** @param {string} base64Chunk raw PCM 16-bit / 16 kHz / mono, base64-encoded */
   sendAudio(base64Chunk) {
     if (!this.ready || !this.ws || this.ws.readyState !== WebSocket.OPEN) return; // drop while (re)connecting
+    if (this.ws.bufferedAmount > GEMINI_AUDIO_BUFFER_LIMIT_BYTES) return; // keep live audio live, not stale
     try {
       this.ws.send(
         JSON.stringify({

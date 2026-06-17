@@ -133,22 +133,55 @@ joinUrlEl.textContent = joinLink.replace(/^https?:\/\//, '');
 // reconnect forever to a dead session.
 let pageActive = true;
 
-fetch(`/api/sessions/${sessionId}`).then(async (r) => {
-  if (!r.ok) {
-    errEl.textContent = 'This session has ended — start a new one from the home page.';
-    toggleBtn.disabled = true;
-    pageActive = false;
-    return;
+const TITLE_KEY = 'glotta.title.' + sessionId;
+
+// Recreate this exact session if the server has lost it. Render's free tier
+// wipes in-memory sessions on restart/spin-down; since the speaker owns the
+// code in their URL, we re-register it (with the remembered create password)
+// so the QR and join links keep working and listeners can rejoin.
+async function reviveSession() {
+  const password = localStorage.getItem('glotta.pwd') || '';
+  const title = localStorage.getItem(TITLE_KEY) || '';
+  try {
+    const r = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, password, title }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+function sessionEnded() {
+  errEl.textContent = 'This session has ended — start a new one from the home page.';
+  toggleBtn.disabled = true;
+  pageActive = false;
+}
+
+async function loadSession() {
+  let r = await fetch(`/api/sessions/${sessionId}`).catch(() => null);
+  if (!r || !r.ok) {
+    if (!(await reviveSession())) { sessionEnded(); return; }
+    r = await fetch(`/api/sessions/${sessionId}`).catch(() => null);
+    if (!r || !r.ok) { sessionEnded(); return; }
   }
   const d = await r.json();
-  if (d && d.title) document.getElementById('title').textContent = d.title;
+  if (d && d.title) {
+    document.getElementById('title').textContent = d.title;
+    localStorage.setItem(TITLE_KEY, d.title); // remembered so revival can restore it
+  }
   // Load the QR only once we know the session exists, so a dead session shows
-  // the message above instead of a broken image.
+  // the message instead of a broken image.
   document.getElementById('qr').src = `/api/sessions/${sessionId}/qr.png`;
   // Connect right away so a refresh re-establishes presence and keeps the
   // session alive even before the mic is (re)started.
   connectWs();
-}).catch(() => {});
+}
+loadSession();
+
+// Keep the free-tier service from spinning down while the speaker page is open,
+// which is what was wiping idle sessions.
+setInterval(() => { if (pageActive) fetch(`/api/sessions/${sessionId}`).catch(() => {}); }, 4 * 60_000);
 
 document.getElementById('copyBtn').onclick = async () => {
   const label = document.getElementById('copyLabel');
@@ -295,7 +328,11 @@ function connectWs() {
       transcriptEl.scrollTop = transcriptEl.scrollHeight;
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
-      if (/not found/i.test(msg.message)) pageActive = false; // session is gone — stop reconnecting
+      if (/not found/i.test(msg.message)) {
+        // The server restarted and lost the session — recreate it under the
+        // same code; the reconnect loop then rejoins it automatically.
+        reviveSession().then((ok) => { if (!ok) sessionEnded(); });
+      }
     }
   };
   ws.onclose = () => {

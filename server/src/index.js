@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
-import { SessionManager } from './sessionManager.js';
+import { isValidSessionId, SessionManager } from './sessionManager.js';
 import { LANGUAGES, isSupportedLanguage } from './languages.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -49,11 +49,16 @@ app.get('/api/languages', (_req, res) => {
 });
 
 app.post('/api/sessions', (req, res) => {
-  const { title, echoTargetLanguage, password } = req.body || {};
+  const { title, echoTargetLanguage, password, sessionId } = req.body || {};
   if (CREATE_PASSWORD && password !== CREATE_PASSWORD) {
     return res.status(401).json({ error: 'Incorrect password' });
   }
-  const session = manager.create({ title, echoTargetLanguage });
+  if (sessionId && !isValidSessionId(sessionId)) {
+    return res.status(400).json({ error: 'Invalid session code' });
+  }
+  // sessionId is optional: the home page omits it (new code), while the speaker
+  // page passes it to revive its session under the same code after a restart.
+  const session = manager.create({ title, echoTargetLanguage, id: sessionId });
   res.json({
     sessionId: session.id,
     title: session.title,

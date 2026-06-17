@@ -45,7 +45,7 @@
 
     <div class="err" id="err"></div>
     <div class="spacer"></div>
-    <p class="footer-note">Powered by Gemini Live Translate · 70+ languages</p>
+    <p class="footer-note">70+ languages</p>
   </div>
 
 <script>
@@ -77,6 +77,7 @@ startBtn.onclick = async () => {
     if (!res.ok) throw new Error('Server error ' + res.status);
     const data = await res.json();
     localStorage.setItem(PWD_KEY, password); // worked — remember it
+    localStorage.setItem('glotta.title.' + data.sessionId, data.title || title);
     location.href = '/speak/' + data.sessionId;
   } catch (e) {
     errEl.textContent = 'Could not start a session. Please try again.';

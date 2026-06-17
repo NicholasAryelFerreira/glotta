@@ -11,9 +11,23 @@ function makeSessionId(length = 6) {
   return id;
 }
 
+// Accept a client-supplied code only if it looks like one we'd have generated,
+// so a session can be revived under the same code after a server restart.
+function sanitizeId(id) {
+  if (typeof id !== 'string') return null;
+  const up = id.toUpperCase();
+  if (up.length !== 6) return null;
+  return [...up].every((c) => CODE_ALPHABET.includes(c)) ? up : null;
+}
+
+export function isValidSessionId(id) {
+  return sanitizeId(id) !== null;
+}
+
 // How long an empty language channel keeps its Gemini session alive, so a
 // listener refreshing their page doesn't tear down and recreate the session.
 const CHANNEL_LINGER_MS = 60_000;
+const LISTENER_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
 
 /**
  * One language channel inside a session: a single Gemini translator shared by
@@ -46,7 +60,9 @@ class LanguageChannel {
   broadcast(obj) {
     const payload = JSON.stringify(obj);
     for (const ws of this.listeners) {
-      if (ws.readyState === ws.OPEN) ws.send(payload);
+      if (ws.readyState !== ws.OPEN) continue;
+      if (obj.type === 'audio' && ws.bufferedAmount > LISTENER_AUDIO_BUFFER_LIMIT_BYTES) continue;
+      ws.send(payload);
     }
   }
 
@@ -79,9 +95,9 @@ class LanguageChannel {
 }
 
 class Session {
-  constructor(manager, { title, echoTargetLanguage }) {
+  constructor(manager, { title, echoTargetLanguage, id }) {
     this.manager = manager;
-    this.id = makeSessionId();
+    this.id = id || makeSessionId();
     this.title = title || 'Live translation';
     this.echoTargetLanguage = Boolean(echoTargetLanguage);
     this.createdAt = Date.now();
@@ -175,9 +191,13 @@ export class SessionManager {
   }
 
   create(opts = {}) {
-    const session = new Session(this, opts);
+    const id = sanitizeId(opts.id);
+    if (opts.id && !id) throw new Error('Invalid session code');
+    // Reviving a code that still exists (e.g. two speaker tabs) is a no-op.
+    if (id && this.sessions.has(id)) return this.sessions.get(id);
+    const session = new Session(this, { ...opts, id });
     this.sessions.set(session.id, session);
-    console.log(`[session:${session.id}] created ("${session.title}")`);
+    console.log(`[session:${session.id}] ${id ? 'revived' : 'created'} ("${session.title}")`);
     return session;
   }
 
