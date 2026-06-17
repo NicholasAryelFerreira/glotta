@@ -77,7 +77,7 @@
 
     <div class="card source-card">
       <label class="field-label" for="mic">Audio source</label>
-      <select id="mic" class="input"><option value="default">Default microphone</option></select>
+      <select id="mic" class="input"><option value="default">Default Microphone</option></select>
       <p class="mic-hint" id="micHint">Using the computer's default microphone.</p>
     </div>
 
@@ -184,7 +184,7 @@ async function populateMics() {
   micSel.innerHTML = '';
   const def = document.createElement('option');
   def.value = 'default';
-  def.textContent = 'Default microphone';
+  def.textContent = 'Default Microphone';
   def.dataset.clean = '0';
   micSel.appendChild(def);
 
