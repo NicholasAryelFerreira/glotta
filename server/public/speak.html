@@ -379,7 +379,7 @@ function updateAudioMeter(int16) {
   audioMeterLevel = Math.max(rawLevel, audioMeterLevel * 0.72);
   const visibleLevel = audioMeterLevel < 0.01 ? 0 : audioMeterLevel;
   audioMeterFill.style.transform = `scaleX(${visibleLevel})`;
-  audioMeterText.textContent = visibleLevel > 0.08 ? 'Glotta sees audio' : 'Low/no signal';
+  audioMeterText.textContent = visibleLevel > 0.08 ? 'Glotta is capturing audio' : 'Low/no signal';
 }
 
 function connectWs() {

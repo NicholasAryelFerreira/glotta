@@ -28,6 +28,7 @@ export function isValidSessionId(id) {
 // listener refreshing their page doesn't tear down and recreate the session.
 const CHANNEL_LINGER_MS = 60_000;
 const LISTENER_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
+const SPEAKER_TRANSCRIPT_LANGUAGE = 'en';
 
 /**
  * One language channel inside a session: a single Gemini translator shared by
@@ -46,10 +47,9 @@ class LanguageChannel {
       onAudio: (data) => this.broadcast({ type: 'audio', data }),
       onTranscript: (kind, text) => {
         this.broadcast({ type: 'transcript', kind, text });
-        // Input transcript is language-independent; mirror it to the speaker
-        // so the preacher can see what the model heard. Only one channel does
-        // this to avoid duplicates.
-        if (kind === 'input' && session.transcriptChannel === this) {
+        // Input transcript is language-independent. Use one listener channel
+        // as a fallback until the dedicated speaker transcript stream is ready.
+        if (kind === 'input' && !session.speakerTranscriptTranslator?.ready && session.transcriptChannel === this) {
           session.sendToSpeaker({ type: 'transcript', kind: 'input', text });
         }
       },
@@ -103,7 +103,8 @@ class Session {
     this.createdAt = Date.now();
     this.speakerWs = null;
     this.channels = new Map(); // lang -> LanguageChannel
-    this.transcriptChannel = null; // the channel that mirrors input transcripts to the speaker
+    this.transcriptChannel = null; // listener channel that mirrors input transcripts to the speaker as a fallback
+    this.speakerTranscriptTranslator = null; // hidden Gemini stream for speaker transcript even with no listeners
   }
 
   attachSpeaker(ws) {
@@ -119,8 +120,28 @@ class Session {
     }
   }
 
-  /** Fan one base64 PCM chunk out to every active language translator. */
+  ensureSpeakerTranscript() {
+    if (this.speakerTranscriptTranslator) return;
+    const translator = new Translator({
+      apiKey: this.manager.apiKey,
+      targetLanguage: SPEAKER_TRANSCRIPT_LANGUAGE,
+      echoTargetLanguage: false,
+      onAudio: () => {},
+      onTranscript: (kind, text) => {
+        if (kind === 'input') this.sendToSpeaker({ type: 'transcript', kind: 'input', text });
+      },
+      onError: (err) => this.sendToSpeaker({ type: 'error', message: err.message }),
+    });
+    this.speakerTranscriptTranslator = translator;
+    translator.connect().catch((err) => {
+      console.error(`[session:${this.id}] speaker transcript failed:`, err.message);
+    });
+  }
+
+  /** Fan one base64 PCM chunk out to Gemini and every active language translator. */
   pushAudio(base64Chunk) {
+    this.ensureSpeakerTranscript();
+    this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
     for (const channel of this.channels.values()) {
       channel.translator.sendAudio(base64Chunk);
     }
@@ -175,6 +196,8 @@ class Session {
   }
 
   end() {
+    this.speakerTranscriptTranslator?.close();
+    this.speakerTranscriptTranslator = null;
     for (const lang of [...this.channels.keys()]) this.closeChannel(lang);
     if (this.speakerWs && this.speakerWs.readyState === this.speakerWs.OPEN) {
       this.speakerWs.close(1000, 'session ended');
