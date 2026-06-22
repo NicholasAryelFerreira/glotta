@@ -124,6 +124,15 @@ langSel.onchange = () => { toggleBtn.disabled = !langSel.value; };
 let ws = null, audioCtx = null, nextPlayTime = 0, listening = false, captionsStarted = false;
 let listenerSocketSeq = 0;
 const scheduledSources = new Set();
+const MAX_LIVE_CAPTION_CHARS = 12000;
+
+function appendBoundedText(el, text, maxChars) {
+  el.textContent += text;
+  if (el.textContent.length > maxChars) {
+    el.textContent = el.textContent.slice(-maxChars).replace(/^\S*\s?/, '');
+  }
+  el.scrollTop = el.scrollHeight;
+}
 
 function base64ToInt16(b64) {
   const bin = atob(b64);
@@ -194,8 +203,7 @@ function connect() {
       playChunk(base64ToInt16(msg.data));
     } else if (msg.type === 'transcript' && msg.kind === 'output') {
       if (!captionsStarted) { captionsEl.textContent = ''; captionsEl.classList.remove('placeholder'); captionsStarted = true; }
-      captionsEl.textContent += msg.text;
-      captionsEl.scrollTop = captionsEl.scrollHeight;
+      appendBoundedText(captionsEl, msg.text, MAX_LIVE_CAPTION_CHARS);
     } else if (msg.type === 'status') {
       if (msg.state === 'speaker-offline') setStatus('offline', 'Speaker reconnecting...');
       if (msg.state === 'speaker-online') setStatus('listening', 'Listening');
