@@ -124,7 +124,7 @@ langSel.onchange = () => { toggleBtn.disabled = !langSel.value; };
 let ws = null, audioCtx = null, nextPlayTime = 0, listening = false, captionsStarted = false;
 let listenerSocketSeq = 0;
 const scheduledSources = new Set();
-const MAX_LIVE_CAPTION_CHARS = 12000;
+const MAX_LIVE_CAPTION_CHARS = 2000;
 
 function appendBoundedText(el, text, maxChars) {
   el.textContent += text;

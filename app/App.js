@@ -135,7 +135,7 @@ export default function App() {
       if (msg.type === 'stats') {
         setStats({ total: msg.total, listeners: msg.listeners });
       } else if (msg.type === 'transcript' && msg.kind === 'input') {
-        setTranscript((t) => (t + msg.text).slice(-2000));
+        setTranscript((t) => (t + msg.text).slice(-1000));
       } else if (msg.type === 'error') {
         if (/not found/i.test(msg.message || '')) {
           reviveSession().then((ok) => {
