@@ -35,6 +35,7 @@ export default function App() {
   const [screen, setScreen] = useState('setup'); // 'setup' | 'live'
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [title, setTitle] = useState('');
+  const [password, setPassword] = useState('');
   const [creating, setCreating] = useState(false);
 
   const [session, setSession] = useState(null); // { sessionId, joinUrl, title }
@@ -44,6 +45,7 @@ export default function App() {
   const [transcript, setTranscript] = useState('');
 
   const wsRef = useRef(null);
+  const wsSeqRef = useRef(0);
   const speakingRef = useRef(false);
 
   // One audio stream, created once. onBuffer reads the live WebSocket from a
@@ -71,8 +73,9 @@ export default function App() {
       const res = await fetch(`${base}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim() }),
+        body: JSON.stringify({ title: title.trim(), password }),
       });
+      if (res.status === 401) throw new Error('Incorrect speaker password');
       if (!res.ok) throw new Error(`Server responded ${res.status}`);
       const data = await res.json();
       setSession(data);
@@ -85,15 +88,44 @@ export default function App() {
     } finally {
       setCreating(false);
     }
-  }, [serverUrl, title]);
+  }, [serverUrl, title, password]);
+
+  const reviveSession = useCallback(async () => {
+    if (!session) return false;
+    const base = serverUrl.trim().replace(/\/+$/, '');
+    try {
+      const res = await fetch(`${base}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: session.title || title.trim(),
+          password,
+          sessionId: session.sessionId,
+        }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      setSession(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [session, serverUrl, title, password]);
 
   const connectWs = useCallback(() => {
     if (!session) return;
+    const existing = wsRef.current;
+    if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) return;
     const url = `${toWsUrl(serverUrl.trim())}/ws/speaker/${session.sessionId}`;
     const ws = new WebSocket(url);
+    const seq = ++wsSeqRef.current;
     wsRef.current = ws;
-    ws.onopen = () => setConnected(true);
+    ws.onopen = () => {
+      if (wsRef.current !== ws || wsSeqRef.current !== seq) return;
+      setConnected(true);
+    };
     ws.onmessage = (ev) => {
+      if (wsRef.current !== ws || wsSeqRef.current !== seq) return;
       let msg;
       try {
         msg = JSON.parse(ev.data);
@@ -105,19 +137,37 @@ export default function App() {
       } else if (msg.type === 'transcript' && msg.kind === 'input') {
         setTranscript((t) => (t + msg.text).slice(-2000));
       } else if (msg.type === 'error') {
-        Alert.alert('Translation error', msg.message);
+        if (/not found/i.test(msg.message || '')) {
+          reviveSession().then((ok) => {
+            if (ok) return;
+            speakingRef.current = false;
+            setSpeaking(false);
+            setConnected(false);
+            try {
+              stream.stop();
+            } catch {
+              // not streaming
+            }
+            Alert.alert('Session ended', 'This session has ended. Create a new one from setup.');
+          });
+        } else {
+          Alert.alert('Translation error', msg.message);
+        }
       }
     };
     ws.onclose = () => {
+      if (wsRef.current !== ws || wsSeqRef.current !== seq) return;
+      wsRef.current = null;
       setConnected(false);
       // Auto-reconnect while the speaker still intends to be live.
-      if (speakingRef.current) setTimeout(connectWs, 1500);
+      if (speakingRef.current) setTimeout(() => { if (speakingRef.current) connectWs(); }, 1500);
     };
     ws.onerror = () => {};
-  }, [session, serverUrl]);
+  }, [session, serverUrl, reviveSession, stream]);
 
   const stopSpeaking = useCallback(() => {
     speakingRef.current = false;
+    wsSeqRef.current += 1;
     setSpeaking(false);
     try {
       stream.stop();
@@ -202,6 +252,17 @@ export default function App() {
             keyboardType="url"
           />
 
+          <Text style={styles.label}>Speaker password</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Enter password"
+            value={password}
+            onChangeText={setPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+
           <Pressable
             style={[styles.button, creating && styles.buttonDisabled]}
             onPress={createSession}
@@ -255,7 +316,7 @@ export default function App() {
       <View style={styles.transcriptBox}>
         <Text style={styles.transcriptLabel}>What the model hears</Text>
         <Text style={styles.transcriptText}>
-          {transcript || 'The live transcript appears here once a listener has joined.'}
+          {transcript || 'The live transcript appears here once Gemini hears audio.'}
         </Text>
       </View>
 

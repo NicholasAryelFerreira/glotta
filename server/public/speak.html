@@ -113,7 +113,7 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M3 12h18M3 19h12"/></svg>
         What the model hears
       </div>
-      <div class="transcript-body placeholder" id="transcript">The live transcript appears here once a listener has joined and Gemini hears audio.</div>
+      <div class="transcript-body placeholder" id="transcript">The live transcript appears here once Gemini hears audio.</div>
     </div>
 
     <div class="err" id="err"></div>
@@ -290,6 +290,7 @@ function setStatus(state) {
 }
 
 let ws = null, audioCtx = null, workletNode = null, mediaStream = null;
+let speakerSocketSeq = 0;
 let transcriptStarted = false;
 
 // AudioWorklet that resamples mic input to 16 kHz mono Int16 and emits ~100 ms chunks.
@@ -383,9 +384,13 @@ function updateAudioMeter(int16) {
 }
 
 function connectWs() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/speaker/${sessionId}`);
-  ws.onmessage = (ev) => {
+  const socket = new WebSocket(`${proto}://${location.host}/ws/speaker/${sessionId}`);
+  const socketSeq = ++speakerSocketSeq;
+  ws = socket;
+  socket.onmessage = (ev) => {
+    if (socket !== ws || socketSeq !== speakerSocketSeq) return;
     const msg = JSON.parse(ev.data);
     if (msg.type === 'stats') {
       statsEl.textContent = msg.total === 0 ? 'No listeners yet' : `${msg.total} listening`;
@@ -402,19 +407,24 @@ function connectWs() {
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
       if (/not found/i.test(msg.message)) {
-        // The server restarted and lost the session — recreate it under the
+        // The server restarted and lost the session - recreate it under the
         // same code; the reconnect loop then rejoins it automatically.
         reviveSession().then((ok) => { if (!ok) sessionEnded(); });
       }
     }
   };
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (socket !== ws || socketSeq !== speakerSocketSeq) return;
     ws = null;
     if (!pageActive) return;
-    if (running) { errEl.textContent = 'Connection lost — reconnecting…'; setStatus('connecting'); }
+    if (running) { errEl.textContent = 'Connection lost - reconnecting...'; setStatus('connecting'); }
     setTimeout(() => { if (pageActive && !ws) connectWs(); }, 1500);
   };
-  ws.onopen = () => { errEl.textContent = ''; if (running) setStatus('live'); };
+  socket.onopen = () => {
+    if (socket !== ws || socketSeq !== speakerSocketSeq) return;
+    errEl.textContent = '';
+    if (running) setStatus('live');
+  };
 }
 
 let running = false;
@@ -456,7 +466,7 @@ async function start() {
   source.connect(workletNode);
   running = true;
   setAudioMeterVisible(true);
-  if (!ws || ws.readyState !== WebSocket.OPEN) connectWs(); // reuse the presence connection if it's already open
+  if (!ws || (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CONNECTING)) connectWs(); // reuse the presence connection if it's open/connecting
   toggleLabel.textContent = 'Stop speaking';
   toggleBtn.classList.remove('btn-accent');
   toggleBtn.classList.add('btn-live');
@@ -483,6 +493,7 @@ toggleBtn.onclick = () => (running ? stop() : start());
 document.getElementById('endBtn').onclick = () => {
   if (!confirm('End this session for everyone listening?')) return;
   pageActive = false; // we're leaving on purpose — don't reconnect
+  speakerSocketSeq += 1;
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'end' }));
   stop();
   if (ws) { ws.close(); ws = null; }
