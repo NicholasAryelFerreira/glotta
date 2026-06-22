@@ -10,6 +10,7 @@ const MODEL = 'gemini-3.5-live-translate-preview';
 const API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
 const WS_BASE = 'wss://generativelanguage.googleapis.com';
 const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
+const PENDING_AUDIO_CHUNK_LIMIT = 30; // about three seconds of 100 ms speaker chunks
 
 /**
  * Wraps one Gemini Live translation session for a single target language.
@@ -42,6 +43,7 @@ export class Translator {
     this.closedByUs = false;
     this.connecting = null;
     this.reconnectAttempts = 0;
+    this.pendingAudio = [];
   }
 
   connect() {
@@ -63,6 +65,7 @@ export class Translator {
           this.ready = true;
           this.reconnectAttempts = 0;
           console.log(`[gemini:${this.targetLanguage}] setup complete`);
+          this.#flushPendingAudio();
           if (!settled) {
             settled = true;
             resolve();
@@ -163,11 +166,25 @@ export class Translator {
     }, delay);
   }
 
+  #queueAudio(base64Chunk) {
+    if (this.closedByUs) return;
+    this.pendingAudio.push(base64Chunk);
+    if (this.pendingAudio.length > PENDING_AUDIO_CHUNK_LIMIT) this.pendingAudio.shift();
+  }
+
+  #flushPendingAudio() {
+    const chunks = this.pendingAudio.splice(0);
+    for (const chunk of chunks) this.sendAudio(chunk);
+  }
+
   /** @param {string} base64Chunk raw PCM 16-bit / 16 kHz / mono, base64-encoded */
   sendAudio(base64Chunk) {
-    // Live sermon audio should never catch up by replaying a backlog. If Gemini
-    // is reconnecting, skip those chunks and resume with current speech.
-    if (!this.ready || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    // Keep a tiny catch-up buffer across Gemini reconnect/setup gaps. Listener
+    // playback remains a single scheduled lane, so catch-up should not overlap.
+    if (!this.ready || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.#queueAudio(base64Chunk);
+      return;
+    }
     if (this.ws.bufferedAmount > GEMINI_AUDIO_BUFFER_LIMIT_BYTES) return; // keep live audio live, not stale
     try {
       this.ws.send(
@@ -177,6 +194,7 @@ export class Translator {
       );
     } catch (err) {
       console.error(`[gemini:${this.targetLanguage}] send failed:`, err.message);
+      this.#queueAudio(base64Chunk);
     }
   }
 
@@ -189,5 +207,6 @@ export class Translator {
       // already closed
     }
     this.ws = null;
+    this.pendingAudio = [];
   }
 }
