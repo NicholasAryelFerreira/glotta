@@ -19,7 +19,7 @@
     box-shadow: 0 14px 40px -18px rgba(0,0,0,.8);
   }
   .qr-frame img { width: 216px; height: 216px; display: block; border-radius: 6px; }
-  .wifi-note { color: var(--ink); font-size: 14px; font-weight: 700; text-align: center; line-height: 1.35; }
+  .wifi-note { color: var(--ink); font-size: 14px; font-weight: 700; text-align: center; line-height: 1.35; font-variant-ligatures: none; }
   .wifi-note strong { color: #fff; letter-spacing: 0.2px; }
   .audio-meter { width: 100%; display: none; flex-direction: column; gap: 7px; margin-top: -4px; }
   .audio-meter.active { display: flex; }
@@ -76,7 +76,7 @@
 
     <div class="card qr-card">
       <div class="qr-frame"><img id="qr" alt="QR code to join"></div>
-      <div class="wifi-note">Lakeview Wi-fi Password: <strong>Mark16:15</strong></div>
+      <div class="wifi-note">Lakeview Wi-Fi Password: <strong>Mark16:15</strong></div>
       <div class="code-row">
         <span class="code-label">Join link</span>
         <span class="join-value" id="joinUrl"></span>
