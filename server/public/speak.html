@@ -19,6 +19,17 @@
     box-shadow: 0 14px 40px -18px rgba(0,0,0,.8);
   }
   .qr-frame img { width: 216px; height: 216px; display: block; border-radius: 6px; }
+  .wifi-note { color: var(--ink); font-size: 14px; font-weight: 700; text-align: center; line-height: 1.35; }
+  .wifi-note strong { color: #fff; letter-spacing: 0.2px; }
+  .audio-meter { width: 100%; display: none; flex-direction: column; gap: 7px; margin-top: -4px; }
+  .audio-meter.active { display: flex; }
+  .audio-meter-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    font-size: 12px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: 0.6px; }
+  .audio-meter-state { color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 600; }
+  .audio-meter-track { height: 14px; width: 100%; overflow: hidden; border-radius: 999px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14); box-shadow: inset 0 1px 8px rgba(0,0,0,.25); }
+  .audio-meter-fill { display: block; width: 100%; height: 100%; transform: scaleX(0); transform-origin: left center;
+    background: linear-gradient(90deg, #54e3c6 0%, #83e56b 55%, #ffd166 78%, #ff6b6b 100%); transition: transform 80ms linear; }
   .code-row { display: flex; flex-direction: column; align-items: center; gap: 4px; }
   .code-label { font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--faint); }
   .code-value { font-size: 30px; font-weight: 800; letter-spacing: 7px; padding-left: 7px;
@@ -65,6 +76,7 @@
 
     <div class="card qr-card">
       <div class="qr-frame"><img id="qr" alt="QR code to join"></div>
+      <div class="wifi-note">Lakeview Wi-fi Password: <strong>Mark16:15</strong></div>
       <div class="code-row">
         <span class="code-label">Join link</span>
         <span class="join-value" id="joinUrl"></span>
@@ -85,6 +97,11 @@
       <svg id="micIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
       <span id="toggleLabel">Start speaking</span>
     </button>
+
+    <div class="audio-meter" id="audioMeter" aria-hidden="true">
+      <div class="audio-meter-head"><span>Audio input</span><span class="audio-meter-state" id="audioMeterText">Waiting for audio</span></div>
+      <div class="audio-meter-track"><span class="audio-meter-fill" id="audioMeterFill"></span></div>
+    </div>
 
     <div class="stat-row">
       <span class="stat-big" id="stats">No listeners yet</span>
@@ -117,6 +134,9 @@ const statusText = document.getElementById('statusText');
 const joinUrlEl = document.getElementById('joinUrl');
 const micSel = document.getElementById('mic');
 const micHint = document.getElementById('micHint');
+const audioMeter = document.getElementById('audioMeter');
+const audioMeterFill = document.getElementById('audioMeterFill');
+const audioMeterText = document.getElementById('audioMeterText');
 
 const MIC_KEY = 'glotta.mic';
 // Labels that indicate a laptop's own/room microphone (keep noise & echo
@@ -308,6 +328,40 @@ function int16ToBase64(int16) {
   return btoa(bin);
 }
 
+let audioMeterLevel = 0;
+function resetAudioMeter() {
+  audioMeterLevel = 0;
+  audioMeterFill.style.transform = 'scaleX(0)';
+  audioMeterText.textContent = 'Waiting for audio';
+}
+
+function setAudioMeterVisible(visible) {
+  audioMeter.classList.toggle('active', visible);
+  audioMeter.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  if (!visible) resetAudioMeter();
+}
+
+function updateAudioMeter(int16) {
+  if (!running || !audioMeter.classList.contains('active')) return;
+  let sumSquares = 0;
+  let peak = 0;
+  let count = 0;
+  const step = Math.max(1, Math.floor(int16.length / 800));
+  for (let i = 0; i < int16.length; i += step) {
+    const sample = Math.abs(int16[i]);
+    peak = Math.max(peak, sample);
+    sumSquares += sample * sample;
+    count += 1;
+  }
+  const rms = Math.sqrt(sumSquares / Math.max(1, count)) / 32768;
+  const peakLevel = peak / 32768;
+  const rawLevel = Math.min(1, Math.max(rms * 5, peakLevel * 0.85));
+  audioMeterLevel = Math.max(rawLevel, audioMeterLevel * 0.72);
+  const visibleLevel = audioMeterLevel < 0.01 ? 0 : audioMeterLevel;
+  audioMeterFill.style.transform = `scaleX(${visibleLevel})`;
+  audioMeterText.textContent = visibleLevel > 0.08 ? 'Receiving audio' : 'Low signal';
+}
+
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws/speaker/${sessionId}`);
@@ -375,12 +429,14 @@ async function start() {
   const source = audioCtx.createMediaStreamSource(mediaStream);
   workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
   workletNode.port.onmessage = (ev) => {
+    updateAudioMeter(ev.data);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'audio', data: int16ToBase64(ev.data) }));
     }
   };
   source.connect(workletNode);
   running = true;
+  setAudioMeterVisible(true);
   if (!ws || ws.readyState !== WebSocket.OPEN) connectWs(); // reuse the presence connection if it's already open
   toggleLabel.textContent = 'Stop speaking';
   toggleBtn.classList.remove('btn-accent');
@@ -395,6 +451,7 @@ function stop() {
   if (audioCtx) audioCtx.close();
   workletNode = mediaStream = audioCtx = null;
   micSel.disabled = false;
+  setAudioMeterVisible(false);
   // Keep the WebSocket open: pausing the mic shouldn't drop the session.
   toggleLabel.textContent = 'Start speaking';
   toggleBtn.classList.remove('btn-live');
