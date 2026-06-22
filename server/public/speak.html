@@ -113,7 +113,7 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M3 12h18M3 19h12"/></svg>
         What the model hears
       </div>
-      <div class="transcript-body placeholder" id="transcript">The live transcript appears here once a listener has joined.</div>
+      <div class="transcript-body placeholder" id="transcript">The live transcript appears here once a listener has joined and Gemini hears audio.</div>
     </div>
 
     <div class="err" id="err"></div>
@@ -304,7 +304,18 @@ class PCMCapture extends AudioWorkletProcessor {
     this.outPos = 0;
   }
   process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
+    const input = inputs[0];
+    if (!input || input.length === 0) return true;
+    // Pro audio interfaces often receive the sound board on input 2/right.
+    // Use the strongest available input channel instead of assuming channel 1.
+    let ch = null;
+    let bestEnergy = -1;
+    for (const candidate of input) {
+      if (!candidate) continue;
+      let energy = 0;
+      for (let i = 0; i < candidate.length; i += 4) energy += candidate[i] * candidate[i];
+      if (energy > bestEnergy) { bestEnergy = energy; ch = candidate; }
+    }
     if (!ch) return true;
     this.buffer.push(...ch);
     // Linear-interpolation resample from the device rate down to 16 kHz.
@@ -368,7 +379,7 @@ function updateAudioMeter(int16) {
   audioMeterLevel = Math.max(rawLevel, audioMeterLevel * 0.72);
   const visibleLevel = audioMeterLevel < 0.01 ? 0 : audioMeterLevel;
   audioMeterFill.style.transform = `scaleX(${visibleLevel})`;
-  audioMeterText.textContent = visibleLevel > 0.08 ? 'Receiving audio' : 'Low signal';
+  audioMeterText.textContent = visibleLevel > 0.08 ? 'Glotta sees audio' : 'Low/no signal';
 }
 
 function connectWs() {
@@ -415,7 +426,7 @@ async function start() {
   // laptop's own mic keeps echo/noise/gain processing on for the room.
   const clean = selectedIsClean();
   const audio = {
-    channelCount: 1,
+    channelCount: { ideal: 2 },
     echoCancellation: !clean,
     noiseSuppression: !clean,
     autoGainControl: !clean,
