@@ -10,7 +10,7 @@ const MODEL = 'gemini-3.5-live-translate-preview';
 const API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
 const WS_BASE = 'wss://generativelanguage.googleapis.com';
 const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
-const PENDING_AUDIO_CHUNK_LIMIT = 30; // about three seconds of 100 ms speaker chunks
+const PENDING_AUDIO_CHUNK_LIMIT = 15; // about 1.5 seconds of 100 ms speaker chunks
 
 /**
  * Wraps one Gemini Live translation session for a single target language.
