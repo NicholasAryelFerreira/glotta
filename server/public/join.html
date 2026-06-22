@@ -122,6 +122,8 @@ async function init() {
 langSel.onchange = () => { toggleBtn.disabled = !langSel.value; };
 
 let ws = null, audioCtx = null, nextPlayTime = 0, listening = false, captionsStarted = false;
+let listenerSocketSeq = 0;
+const scheduledSources = new Set();
 
 function base64ToInt16(b64) {
   const bin = atob(b64);
@@ -138,6 +140,14 @@ const TARGET_AUDIO_BUFFER_S = 0.9;
 const MIN_AUDIO_BUFFER_S = 0.35;
 const MAX_AUDIO_BUFFER_S = 3.0;
 
+function clearScheduledAudio() {
+  for (const src of scheduledSources) {
+    try { src.stop(); } catch { /* already stopped */ }
+  }
+  scheduledSources.clear();
+  nextPlayTime = audioCtx ? audioCtx.currentTime + TARGET_AUDIO_BUFFER_S : 0;
+}
+
 function playChunk(int16) {
   if (!audioCtx) return;
   if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
@@ -150,22 +160,35 @@ function playChunk(int16) {
   src.connect(audioCtx.destination);
   const now = audioCtx.currentTime;
   const queuedAhead = nextPlayTime - now;
-  if (queuedAhead < MIN_AUDIO_BUFFER_S || queuedAhead > MAX_AUDIO_BUFFER_S) {
+  if (queuedAhead > MAX_AUDIO_BUFFER_S) {
+    clearScheduledAudio();
+  } else if (queuedAhead < MIN_AUDIO_BUFFER_S) {
     nextPlayTime = now + TARGET_AUDIO_BUFFER_S;
   }
+  src.onended = () => scheduledSources.delete(src);
+  scheduledSources.add(src);
   try {
     src.start(nextPlayTime);
     nextPlayTime += buf.duration;
   } catch {
+    scheduledSources.delete(src);
     nextPlayTime = audioCtx.currentTime + TARGET_AUDIO_BUFFER_S;
   }
 }
 
 function connect() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/listener/${sessionId}?lang=${encodeURIComponent(langSel.value)}`);
-  ws.onopen = () => { errEl.textContent = ''; setStatus('listening', 'Listening'); };
-  ws.onmessage = (ev) => {
+  const socket = new WebSocket(`${proto}://${location.host}/ws/listener/${sessionId}?lang=${encodeURIComponent(langSel.value)}`);
+  const socketSeq = ++listenerSocketSeq;
+  ws = socket;
+  socket.onopen = () => {
+    if (socket !== ws || socketSeq !== listenerSocketSeq) return;
+    errEl.textContent = '';
+    setStatus('listening', 'Listening');
+  };
+  socket.onmessage = (ev) => {
+    if (socket !== ws || socketSeq !== listenerSocketSeq) return;
     const msg = JSON.parse(ev.data);
     if (msg.type === 'audio') {
       playChunk(base64ToInt16(msg.data));
@@ -174,16 +197,19 @@ function connect() {
       captionsEl.textContent += msg.text;
       captionsEl.scrollTop = captionsEl.scrollHeight;
     } else if (msg.type === 'status') {
-      if (msg.state === 'speaker-offline') setStatus('offline', 'Speaker reconnecting…');
+      if (msg.state === 'speaker-offline') setStatus('offline', 'Speaker reconnecting...');
       if (msg.state === 'speaker-online') setStatus('listening', 'Listening');
       if (msg.state === 'ended') { setStatus('ended', 'The session has ended'); stop(false); }
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
     }
   };
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (socket !== ws || socketSeq !== listenerSocketSeq) return;
+    ws = null;
+    clearScheduledAudio();
     if (listening) {
-      setStatus('offline', 'Reconnecting…');
+      setStatus('offline', 'Reconnecting...');
       setTimeout(() => { if (listening) connect(); }, 1500);
     }
   };
@@ -193,6 +219,7 @@ function start() {
   // AudioContext must be created in the tap handler for iOS Safari to allow playback.
   audioCtx = new AudioContext();
   audioCtx.resume();
+  scheduledSources.clear();
   nextPlayTime = audioCtx.currentTime + TARGET_AUDIO_BUFFER_S;
   localStorage.setItem(LANG_KEY, langSel.value);
   listening = true;
@@ -206,6 +233,8 @@ function start() {
 
 function stop(closeWs = true) {
   listening = false;
+  listenerSocketSeq += 1;
+  clearScheduledAudio();
   if (closeWs && ws) ws.close();
   if (audioCtx) audioCtx.close();
   ws = audioCtx = null;
