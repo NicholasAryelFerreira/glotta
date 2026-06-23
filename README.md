@@ -1,210 +1,114 @@
 # Glotta
 
-Real-time translation of live sermons, powered by Google's
-`gemini-3.5-live-translate-preview` model.
+Glotta is a real-time sermon translation app powered by Google's `gemini-3.5-live-translate-preview` model. A speaker starts one live session, shares a QR code, and listeners join from their phone browser to hear translated audio with captions in 70+ languages.
 
-> The GitHub repo is **glotta**. Your local working folder may still be named
-> `Glossolalia` — the `cd` paths below reflect that. If you rename the folder,
-> adjust those paths accordingly.
+<p align="center">
+  <img src="docs/screenshots/home-session.png" alt="Glotta session setup screen" width="260">
+  <img src="docs/screenshots/speaker-dashboard.png" alt="Glotta speaker dashboard with QR code" width="260">
+  <img src="docs/screenshots/listener-captions.png" alt="Glotta listener captions screen" width="260">
+</p>
 
-- **Speaker** opens the iOS app, starts a session, and speaks. Their voice is
-  streamed to a relay server.
-- **Receivers** scan a QR code, which opens a web page in their phone's browser.
-  They pick a language and hear the translated audio (with live captions) in
-  near real time. **No app install needed for listeners.**
+## What it does
 
-One session can serve many languages at once — each language opens its own
-Gemini translation stream on the server, shared by everyone listening in that
-language.
+- Creates a speaker-led translation session with a QR join link.
+- Streams microphone or sound-board audio to a Node.js relay server over WebSockets.
+- Uses Gemini Live Translate to generate translated speech and captions.
+- Supports multiple listener languages at the same time, with one shared Gemini stream per language.
+- Lets listeners join from a browser without installing an app.
+- Shows the speaker live listener counts, an audio input meter, and a bounded source transcript.
 
+## How it works
+
+```text
+Speaker browser/app -> PCM audio over WebSocket -> Node relay server -> Gemini Live Translate
+                                                        |
+                                                        v
+Listener browser <- translated audio + captions over WebSocket
 ```
- Speaker app (iOS) ──mic PCM──▶  Relay server (Node)  ──▶ Gemini Live Translate
-                                       │                      (one stream per language)
-   Receiver browser  ◀──translated audio + captions──┘
-   (joins by QR code)
-```
+
+The server keeps the Gemini API key private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use the Web Audio API to schedule playback close to live while dropping stale queued audio so a sermon does not drift far behind.
 
 ## Repository layout
 
-| Folder    | What it is                                                          |
-| --------- | ------------------------------------------------------------------- |
-| `server/` | Node.js relay server + the receiver web pages (`/join/:id`).        |
-| `app/`    | Expo (React Native) iOS speaker app.                                |
-
----
+| Folder | Purpose |
+| --- | --- |
+| `server/` | Express/WebSocket relay server and browser UI for speaker/listener pages. |
+| `app/` | Expo React Native speaker app. |
+| `docs/screenshots/` | README screenshots. |
 
 ## Prerequisites
 
-1. **A Google Gemini API key** with access to the Live Translate preview model.
-   Get one at <https://aistudio.google.com/apikey>.
-2. **Node.js 20.19.4 or newer.** You currently have an older 20.x — Expo SDK 56
-   requires at least 20.19.4. Download the latest LTS from
-   <https://nodejs.org/en/download> and install it before building the app.
-3. The phone running the **speaker app** and the receivers' phones must be able
-   to reach the relay server. For a quick test, putting everyone on the same
-   Wi-Fi as the computer running the server is enough. For real services, deploy
-   the server to a host with a public URL (see *Deploying the server*).
+- Node.js 20.19.4 or newer.
+- A Gemini API key with access to Gemini Live Translate.
+- A public HTTPS deployment for real services, or a shared local network for testing.
 
----
+## Run the relay server locally
 
-## 1. Run the relay server (Windows)
-
-All commands below run in **PowerShell**.
-
-1. Open PowerShell and go to the server folder:
-   ```powershell
-   cd "C:\Users\nafer\github repo\Glossolalia\server"
-   ```
-2. Install dependencies (only needed the first time):
-   ```powershell
-   npm install
-   ```
-3. Create your environment file from the template:
-   ```powershell
-   Copy-Item .env.example .env
-   ```
-4. Open `.env` in a text editor and paste your Gemini key:
-   ```
-   GEMINI_API_KEY=your-real-key-here
-   ```
-5. Start the server:
-   ```powershell
-   npm start
-   ```
-   You'll see something like:
-   ```
-   Glotta server listening on port 8080
-     Local:   http://localhost:8080
-     Network: http://192.168.1.36:8080
-   ```
-   **Write down the `Network:` address** — the speaker app needs it.
-
-> Allow Node through the Windows Firewall the first time, or phones on the
-> network won't be able to connect.
-
-### Quick test without the app
-
-You can try the whole pipeline from a browser before building the iOS app:
-
-1. On the computer, open `http://localhost:8080` and click **Start a session**.
-2. On a phone (same Wi-Fi), open the **join URL** shown under the QR code
-   (e.g. `http://192.168.1.36:8080/join/ABC123`), pick a language, tap **listen**.
-3. Back on the computer's speaker page, tap **Start speaking** and talk.
-
-> Browser microphone access only works on `localhost` or over HTTPS. The
-> computer's own speaker page works because it's on `localhost`; the **iOS app**
-> is the proper speaker for real use.
-
----
-
-## 2. Build & run the iOS speaker app
-
-Because you're on Windows, you can't compile iOS locally — use **EAS Build**,
-which compiles in the cloud and installs onto your iPhone.
-
-1. Open a new PowerShell window and go to the app folder:
-   ```powershell
-   cd "C:\Users\nafer\github repo\Glossolalia\app"
-   ```
-2. Install dependencies (first time only):
-   ```powershell
-   npm install
-   ```
-3. Point the app at your server. Open `app/src/config.js` and set
-   `DEFAULT_SERVER_URL` to the `Network:` address from step 1 (you can also
-   change it on the app's setup screen each time):
-   ```js
-   export const DEFAULT_SERVER_URL = 'http://192.168.1.36:8080';
-   ```
-4. Install the EAS command-line tool and log in (free Expo account required —
-   sign up at <https://expo.dev>):
-   ```powershell
-   npm install -g eas-cli
-   eas login
-   ```
-5. Link the project to your Expo account (first time only):
-   ```powershell
-   eas init
-   ```
-6. Build a device build you can install on your iPhone:
-   ```powershell
-   eas build --platform ios --profile preview
-   ```
-   - EAS will ask to handle iOS signing credentials — let it manage them.
-   - You'll need an **Apple Developer account** to install on a physical iPhone.
-   - When the build finishes, open the link it prints on your iPhone (or scan
-     the QR code) to install the app.
-
-### Faster iteration (optional): Expo Go / dev client
-
-For quick UI changes you can run the Metro dev server and connect from your
-phone, but note the **microphone streaming uses a native module that does not
-run in the standard Expo Go app**. Use a **development build**:
+Run these commands in **PowerShell**:
 
 ```powershell
-eas build --platform ios --profile development
-npx expo start --dev-client
+cd "C:\Users\nafer\github repo\Glotta\server"
+npm install
 ```
 
-Then open the dev build on your iPhone and scan the QR from `expo start`.
+Create a `.env` file in `server/`:
 
----
+```env
+GEMINI_API_KEY=your-gemini-key
+PASSWORD=choose-a-speaker-password
+```
 
-## 3. Use it in a service
+Start the server:
 
-1. Speaker opens the app → enters a title → **Start a session**.
-2. The app shows a big QR code (and a short session code).
-3. Display that QR on a screen / print it / put it in the bulletin.
-4. Receivers scan it with their phone camera → the join page opens → they pick
-   a language → tap **listen** → put in earphones.
-5. Speaker taps **Start speaking**. Translated audio flows to every listener.
-6. The speaker screen shows how many people are listening per language and a
-   live transcript of what the model is hearing.
-7. Tap **End session** when finished.
+```powershell
+npm start
+```
 
----
+Then open `http://localhost:8080`, start a session, and share the QR/join link with listeners on the same network.
 
-## Deploying the server (beyond same-Wi-Fi)
+## Run the mobile speaker app
 
-For real congregations you'll want the server on a public URL so receivers can
-join over cellular data, and so browser audio works over HTTPS:
+Run these commands in **PowerShell**:
 
-- Deploy `server/` to any Node host (Render, Railway, Fly.io, a VPS, etc.).
-- Set `GEMINI_API_KEY` and, if needed, `PUBLIC_BASE_URL` (e.g.
-  `https://translate.yourchurch.org`) so QR codes point at the public address.
-- Put it behind HTTPS (most hosts do this automatically). Receiver audio
-  playback and the QR join flow then work from any network.
-- In the app, set the server address to that public URL.
+```powershell
+cd "C:\Users\nafer\github repo\Glotta\app"
+npm install
+```
 
-### Protecting your API key
+Set the relay URL in `app/src/config.js` or type it in the app setup screen:
 
-The current server holds the Gemini key and brokers all model traffic, so the
-key is never exposed to phones — good. If you later move translation directly
-into client apps, switch to **ephemeral tokens** (see the Gemini Live docs) so
-the key stays on your server.
+```js
+export const DEFAULT_SERVER_URL = 'https://your-glotta-server.example.com';
+```
 
----
+For iOS device builds from Windows, use EAS Build:
 
-## How it works (for developers)
+```powershell
+npm install -g eas-cli
+eas login
+eas build --platform ios --profile preview
+```
 
-- **Audio in:** the app captures microphone audio with `expo-audio`'s
-  `AudioStream` at 16 kHz mono `int16` PCM, base64-encodes each buffer, and
-  sends it over a WebSocket (`/ws/speaker/:id`).
-- **Fan-out:** the server forwards every incoming chunk to one
-  `gemini-3.5-live-translate-preview` session **per active language**
-  (`server/src/translator.js`). Sessions auto-reconnect if Gemini closes them
-  (sermons outlast the per-session limit).
-- **Audio out:** Gemini returns 24 kHz mono `int16` PCM, which the server
-  broadcasts to every listener of that language over `/ws/listener/:id?lang=xx`.
-  The receiver page schedules the chunks back-to-back through the Web Audio API.
-- **Transcripts:** input transcription is mirrored to the speaker; output
-  transcription is shown as captions to listeners.
-- **Languages:** the full supported list lives in `server/src/languages.js`.
+## Deployment notes
 
-## Limitations to know about
+Deploy `server/` to a Node host such as Render, Railway, Fly.io, or a VPS. Configure:
 
-- Voice replication can shift after long pauses or with multiple speakers
-  (a model limitation, noted in the Gemini docs).
-- Language detection can struggle with heavy accents or very similar languages;
-  this mainly affects the *input* transcript, not the translation quality.
-- The model filters music/noise but a loud worship band may still bleed through.
+```env
+GEMINI_API_KEY=your-gemini-key
+PASSWORD=choose-a-speaker-password
+PUBLIC_BASE_URL=https://your-public-url.example.com
+```
+
+The relay server stores live sessions in memory, so free-tier hosts that sleep or restart can interrupt active sessions. The speaker page includes session revival logic to recreate the same QR code when possible, but a production deployment should use a host that stays awake during services.
+
+## Reliability details
+
+- Speaker audio is sent as small PCM chunks over WebSockets.
+- Browser speaker input can select external audio interfaces and chooses the strongest channel for sound-board feeds.
+- Listener playback keeps a small buffer for smooth audio but drops stale queued audio to avoid falling far behind.
+- Live transcript and captions are capped in the browser to prevent long sermons from overloading the page.
+- Gemini streams reconnect automatically, with a short catch-up window to avoid losing brief gaps.
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
