@@ -17,3 +17,9 @@ Thumbs.db
 # Expo build output
 app/.expo/
 app/dist/
+
+# Local editor/tooling config
+.claude/
+**/.claude/
+CLAUDE.md
+**/CLAUDE.md
