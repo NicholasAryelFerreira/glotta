@@ -38,9 +38,14 @@
       <input id="pwd" class="input" type="password" placeholder="Enter password" autocomplete="off">
       <button id="start" class="btn btn-primary" style="margin-top:18px">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"/></svg>
-        Start a session
+        Start a new session
       </button>
-      <p class="hint" style="margin:16px auto 2px">You are the speaker. Listeners join by scanning a QR code on the next screen — no app to install.</p>
+      <button id="weekly" class="btn btn-accent" style="margin-top:10px" disabled>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span id="weeklyLabel">Weekly session</span>
+      </button>
+      <p class="hint" style="margin:16px auto 2px">You are the speaker. Listeners join by scanning a QR code on the next screen — no app to install.
+        The weekly session always uses the same code, link and QR — safe to print and reuse every Sunday.</p>
     </div>
 
     <div class="err" id="err"></div>
@@ -50,6 +55,7 @@
 
 <script>
 const startBtn = document.getElementById('start');
+const weeklyBtn = document.getElementById('weekly');
 const errEl = document.getElementById('err');
 const pwdEl = document.getElementById('pwd');
 const PWD_KEY = 'glotta.pwd';
@@ -57,21 +63,35 @@ const PWD_KEY = 'glotta.pwd';
 // Remember the passcode on this device so the church only types it once.
 pwdEl.value = localStorage.getItem(PWD_KEY) || '';
 
-startBtn.onclick = async () => {
+// The weekly session reuses a fixed server-configured code, so the printed
+// QR and join link stay valid week after week.
+let weeklySessionId = null;
+fetch('/api/config')
+  .then((r) => r.json())
+  .then((d) => {
+    weeklySessionId = d.weeklySessionId;
+    document.getElementById('weeklyLabel').textContent = `Weekly session — code ${weeklySessionId}`;
+    weeklyBtn.disabled = false;
+  })
+  .catch(() => { weeklyBtn.style.display = 'none'; });
+
+async function startSession(sessionId) {
   const title = document.getElementById('title').value.trim();
   const password = pwdEl.value;
   startBtn.disabled = true;
+  weeklyBtn.disabled = true;
   errEl.textContent = '';
   try {
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, password }),
+      body: JSON.stringify({ title, password, sessionId }),
     });
     if (res.status === 401) {
       errEl.textContent = 'Incorrect password.';
       localStorage.removeItem(PWD_KEY);
       startBtn.disabled = false;
+      weeklyBtn.disabled = !weeklySessionId;
       return;
     }
     if (!res.ok) throw new Error('Server error ' + res.status);
@@ -82,8 +102,12 @@ startBtn.onclick = async () => {
   } catch (e) {
     errEl.textContent = 'Could not start a session. Please try again.';
     startBtn.disabled = false;
+    weeklyBtn.disabled = !weeklySessionId;
   }
-};
+}
+
+startBtn.onclick = () => startSession(undefined);
+weeklyBtn.onclick = () => { if (weeklySessionId) startSession(weeklySessionId); };
 const submitOnEnter = (e) => { if (e.key === 'Enter') startBtn.click(); };
 document.getElementById('title').addEventListener('keydown', submitOnEnter);
 pwdEl.addEventListener('keydown', submitOnEnter);

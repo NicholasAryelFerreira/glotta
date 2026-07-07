@@ -26,6 +26,15 @@ if (!CREATE_PASSWORD) {
   console.warn('No PASSWORD set — anyone can create a session. Set PASSWORD to require a passcode.');
 }
 
+// Fixed code for the recurring weekly service. Because it never changes, the
+// join link and QR code can be printed once and reused every Sunday; the
+// speaker just picks "weekly session" on the home page to go live under it.
+const WEEKLY_SESSION_ID = (process.env.WEEKLY_SESSION_ID || 'SUNDAY').toUpperCase();
+if (!isValidSessionId(WEEKLY_SESSION_ID)) {
+  console.error(`Invalid WEEKLY_SESSION_ID "${WEEKLY_SESSION_ID}": must be 6 characters from A-Z (no I, L or O) and 2-9.`);
+  process.exit(1);
+}
+
 // If the speaker drops (network blip, app backgrounded, page refresh), keep the
 // session alive this long so they can reconnect without every listener losing
 // it. The speaker page also re-establishes its connection automatically on
@@ -46,6 +55,13 @@ function baseUrl(req) {
 
 app.get('/api/languages', (_req, res) => {
   res.json({ languages: LANGUAGES });
+});
+
+app.get('/api/config', (req, res) => {
+  res.json({
+    weeklySessionId: WEEKLY_SESSION_ID,
+    weeklyJoinUrl: `${baseUrl(req)}/join/${WEEKLY_SESSION_ID}`,
+  });
 });
 
 app.post('/api/sessions', (req, res) => {
