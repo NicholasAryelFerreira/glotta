@@ -11,13 +11,13 @@ function makeSessionId(length = 6) {
   return id;
 }
 
-// Accept a client-supplied code only if it looks like one we'd have generated,
-// so a session can be revived under the same code after a server restart.
+// Client-supplied codes (session revival, the configured weekly code) may be
+// any 6 letters/digits — e.g. a chosen word like SERMON — even though codes we
+// generate ourselves stick to the unambiguous alphabet above.
 function sanitizeId(id) {
   if (typeof id !== 'string') return null;
   const up = id.toUpperCase();
-  if (up.length !== 6) return null;
-  return [...up].every((c) => CODE_ALPHABET.includes(c)) ? up : null;
+  return /^[A-Z0-9]{6}$/.test(up) ? up : null;
 }
 
 export function isValidSessionId(id) {

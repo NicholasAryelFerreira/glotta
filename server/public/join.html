@@ -50,6 +50,7 @@
     <p class="session-sub" id="sessionInfo"></p>
 
     <div class="card listen-card">
+      <p class="listen-instr" id="waitNote" style="display:none">The service hasn't started yet. Keep this page open — it will connect automatically once the speaker goes live.</p>
       <p class="listen-instr">Put in your earphones, then choose your language</p>
       <select id="lang" class="input"><option value="">Choose your language…</option></select>
       <button id="toggle" class="btn btn-accent listen-btn" disabled>
@@ -94,19 +95,37 @@ function setStatus(kind, text) {
   }
 }
 
-async function init() {
-  const [sessRes, langRes] = await Promise.all([
-    fetch(`/api/sessions/${sessionId}`),
-    fetch('/api/languages'),
-  ]);
-  if (!sessRes.ok) {
-    errEl.textContent = 'This session has ended or the link is wrong. Ask for a new QR code.';
+// The printed weekly QR is scanned before the speaker goes live, so a missing
+// session isn't an error: wait politely and keep checking until it starts.
+const SESSION_POLL_MS = 5000;
+const waitNote = document.getElementById('waitNote');
+let sessionReady = false;
+
+async function checkSession() {
+  let res = null;
+  try { res = await fetch(`/api/sessions/${sessionId}`); } catch { /* offline — retry below */ }
+  if (res && res.ok) {
+    const sess = await res.json();
+    sessionReady = true;
+    document.getElementById('title').textContent = sess.title;
+    document.getElementById('sessionInfo').textContent = `Session ${sess.sessionId}`;
+    waitNote.style.display = 'none';
+    setStatus('hidden');
+    toggleBtn.disabled = !langSel.value;
     return;
   }
-  const sess = await sessRes.json();
-  document.getElementById('title').textContent = sess.title;
-  document.getElementById('sessionInfo').textContent = `Session ${sess.sessionId}`;
+  if (!/^[a-z0-9]{6}$/i.test(sessionId)) {
+    errEl.textContent = 'This link looks wrong. Ask for a new QR code.';
+    return;
+  }
+  document.getElementById('sessionInfo').textContent = `Session ${sessionId.toUpperCase()}`;
+  waitNote.style.display = '';
+  setStatus('offline', 'Waiting for the service to start');
+  setTimeout(checkSession, SESSION_POLL_MS);
+}
 
+async function init() {
+  const langRes = await fetch('/api/languages');
   const { languages } = await langRes.json();
   languages.sort((a, b) => a.name.localeCompare(b.name));
   for (const l of languages) {
@@ -117,9 +136,9 @@ async function init() {
   }
   const saved = localStorage.getItem(LANG_KEY);
   if (saved && [...langSel.options].some(o => o.value === saved)) langSel.value = saved;
-  toggleBtn.disabled = !langSel.value;
+  await checkSession();
 }
-langSel.onchange = () => { toggleBtn.disabled = !langSel.value; };
+langSel.onchange = () => { toggleBtn.disabled = !langSel.value || !sessionReady; };
 
 let ws = null, audioCtx = null, nextPlayTime = 0, listening = false, captionsStarted = false;
 let listenerSocketSeq = 0;

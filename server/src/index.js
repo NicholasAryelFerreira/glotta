@@ -29,9 +29,9 @@ if (!CREATE_PASSWORD) {
 // Fixed code for the recurring weekly service. Because it never changes, the
 // join link and QR code can be printed once and reused every Sunday; the
 // speaker just picks "weekly session" on the home page to go live under it.
-const WEEKLY_SESSION_ID = (process.env.WEEKLY_SESSION_ID || 'SUNDAY').toUpperCase();
+const WEEKLY_SESSION_ID = (process.env.WEEKLY_SESSION_ID || 'SERMON').toUpperCase();
 if (!isValidSessionId(WEEKLY_SESSION_ID)) {
-  console.error(`Invalid WEEKLY_SESSION_ID "${WEEKLY_SESSION_ID}": must be 6 characters from A-Z (no I, L or O) and 2-9.`);
+  console.error(`Invalid WEEKLY_SESSION_ID "${WEEKLY_SESSION_ID}": must be 6 letters or digits.`);
   process.exit(1);
 }
 
