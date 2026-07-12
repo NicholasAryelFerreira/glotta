@@ -272,6 +272,17 @@ function stop(closeWs = true) {
 }
 
 toggleBtn.onclick = () => (listening ? stop() : start());
+
+// Mobile browsers suspend the AudioContext once the tab has been in the
+// background for a while; captions keep streaming but playback stays silent.
+// Resuming must happen on return to the foreground, and stale queued audio is
+// dropped so playback rejoins the live edge instead of bursting out backlog.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !listening || !audioCtx) return;
+  clearScheduledAudio();
+  audioCtx.resume().catch(() => {});
+});
+
 init();
 </script>
 </body>
