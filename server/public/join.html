@@ -162,23 +162,13 @@ function base64ToInt16(b64) {
 
 // Keep playback close to live. Brief buffering prevents crackles, but stale
 // queued audio is dropped quickly so a sermon does not drift seconds behind.
-// Chunks are spliced sample-contiguously; the clock only resets when playback
-// genuinely ran dry or drifted too far behind, and every discontinuity gets a
-// millisecond-scale gain ramp — an abrupt mid-waveform cut is audible as a
-// click ("rain drop"), a ramped one is not.
 const TARGET_AUDIO_BUFFER_S = 0.25;
+const MIN_AUDIO_BUFFER_S = 0.08;
 const MAX_AUDIO_BUFFER_S = 1.1;
-const FADE_S = 0.005;
 
 function clearScheduledAudio() {
-  const now = audioCtx ? audioCtx.currentTime : 0;
-  for (const item of scheduledSources) {
-    try {
-      item.gain.gain.cancelScheduledValues(now);
-      item.gain.gain.setValueAtTime(1, now);
-      item.gain.gain.linearRampToValueAtTime(0, now + FADE_S);
-      item.src.stop(now + FADE_S * 2);
-    } catch { /* already stopped */ }
+  for (const src of scheduledSources) {
+    try { src.stop(); } catch { /* already stopped */ }
   }
   scheduledSources.clear();
   nextPlayTime = audioCtx ? audioCtx.currentTime + TARGET_AUDIO_BUFFER_S : 0;
@@ -192,31 +182,22 @@ function playChunk(int16) {
   const buf = audioCtx.createBuffer(1, f32.length, 24000);
   buf.copyToChannel(f32, 0);
   const src = audioCtx.createBufferSource();
-  const gain = audioCtx.createGain();
   src.buffer = buf;
-  src.connect(gain);
-  gain.connect(audioCtx.destination);
+  src.connect(audioCtx.destination);
   const now = audioCtx.currentTime;
-  let startsAfterGap = false;
-  if (nextPlayTime - now > MAX_AUDIO_BUFFER_S) {
-    clearScheduledAudio(); // fades out the backlog and resets the clock
-    startsAfterGap = true;
-  } else if (nextPlayTime <= now) {
-    nextPlayTime = now + TARGET_AUDIO_BUFFER_S; // ran dry — rebuild the cushion
-    startsAfterGap = true;
+  const queuedAhead = nextPlayTime - now;
+  if (queuedAhead > MAX_AUDIO_BUFFER_S) {
+    clearScheduledAudio();
+  } else if (queuedAhead < MIN_AUDIO_BUFFER_S) {
+    nextPlayTime = now + TARGET_AUDIO_BUFFER_S;
   }
-  if (startsAfterGap) {
-    gain.gain.setValueAtTime(0, nextPlayTime);
-    gain.gain.linearRampToValueAtTime(1, nextPlayTime + FADE_S);
-  }
-  const item = { src, gain };
-  src.onended = () => scheduledSources.delete(item);
-  scheduledSources.add(item);
+  src.onended = () => scheduledSources.delete(src);
+  scheduledSources.add(src);
   try {
     src.start(nextPlayTime);
     nextPlayTime += buf.duration;
   } catch {
-    scheduledSources.delete(item);
+    scheduledSources.delete(src);
     nextPlayTime = audioCtx.currentTime + TARGET_AUDIO_BUFFER_S;
   }
 }
