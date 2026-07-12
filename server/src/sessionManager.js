@@ -29,6 +29,12 @@ export function isValidSessionId(id) {
 const CHANNEL_LINGER_MS = 60_000;
 const LISTENER_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
 const SPEAKER_TRANSCRIPT_LANGUAGE = 'en';
+const MIN_AUDIO_IDLE_MINUTES = 60;
+const configuredAudioIdleMinutes = Number(process.env.SESSION_AUDIO_IDLE_MINUTES);
+const SESSION_AUDIO_IDLE_MINUTES = Number.isFinite(configuredAudioIdleMinutes)
+  ? Math.max(MIN_AUDIO_IDLE_MINUTES, configuredAudioIdleMinutes)
+  : MIN_AUDIO_IDLE_MINUTES;
+const SESSION_AUDIO_IDLE_MS = SESSION_AUDIO_IDLE_MINUTES * 60_000;
 
 /**
  * One language channel inside a session: a single Gemini translator shared by
@@ -54,6 +60,7 @@ class LanguageChannel {
         }
       },
       onError: (err) => this.broadcast({ type: 'error', message: err.message }),
+      onStatus: (state) => this.broadcast({ type: 'status', state }),
     });
   }
 
@@ -105,6 +112,23 @@ class Session {
     this.channels = new Map(); // lang -> LanguageChannel
     this.transcriptChannel = null; // listener channel that mirrors input transcripts to the speaker as a fallback
     this.speakerTranscriptTranslator = null; // hidden Gemini stream for speaker transcript even with no listeners
+    this.ended = false;
+    this.lastAudioAt = Date.now();
+    this.audioIdleTimer = null;
+    this.scheduleAudioIdleCheck();
+  }
+
+  scheduleAudioIdleCheck(delay = SESSION_AUDIO_IDLE_MS) {
+    if (this.audioIdleTimer) clearTimeout(this.audioIdleTimer);
+    this.audioIdleTimer = setTimeout(() => {
+      if (this.ended) return;
+      const idleFor = Date.now() - this.lastAudioAt;
+      if (idleFor >= SESSION_AUDIO_IDLE_MS) {
+        this.end(`no speaker audio for ${SESSION_AUDIO_IDLE_MINUTES} minutes`);
+      } else {
+        this.scheduleAudioIdleCheck(SESSION_AUDIO_IDLE_MS - idleFor);
+      }
+    }, delay);
   }
 
   attachSpeaker(ws) {
@@ -140,6 +164,8 @@ class Session {
 
   /** Fan one base64 PCM chunk out to Gemini and every active language translator. */
   pushAudio(base64Chunk) {
+    if (this.ended) return;
+    this.lastAudioAt = Date.now();
     this.ensureSpeakerTranscript();
     this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
     for (const channel of this.channels.values()) {
@@ -195,7 +221,13 @@ class Session {
     this.sendToSpeaker({ type: 'stats', total, listeners });
   }
 
-  end() {
+  end(reason = 'ended by speaker') {
+    if (this.ended) return;
+    this.ended = true;
+    if (this.audioIdleTimer) clearTimeout(this.audioIdleTimer);
+    this.audioIdleTimer = null;
+    if (this.speakerGraceTimer) clearTimeout(this.speakerGraceTimer);
+    this.speakerGraceTimer = null;
     this.speakerTranscriptTranslator?.close();
     this.speakerTranscriptTranslator = null;
     for (const lang of [...this.channels.keys()]) this.closeChannel(lang);
@@ -203,7 +235,7 @@ class Session {
       this.speakerWs.close(1000, 'session ended');
     }
     this.manager.sessions.delete(this.id);
-    console.log(`[session:${this.id}] ended`);
+    console.log(`[session:${this.id}] ended (${reason})`);
   }
 }
 

@@ -30,20 +30,24 @@ export class Translator {
    * @param {(base64Audio: string) => void} opts.onAudio
    * @param {(kind: 'input'|'output', text: string) => void} opts.onTranscript
    * @param {(err: Error) => void} opts.onError
+   * @param {(state: 'translator-online'|'translator-reconnecting') => void} [opts.onStatus]
    */
-  constructor({ apiKey, targetLanguage, echoTargetLanguage = false, onAudio, onTranscript, onError }) {
+  constructor({ apiKey, targetLanguage, echoTargetLanguage = false, onAudio, onTranscript, onError, onStatus }) {
     this.apiKey = apiKey;
     this.targetLanguage = targetLanguage;
     this.echoTargetLanguage = echoTargetLanguage;
     this.onAudio = onAudio;
     this.onTranscript = onTranscript;
     this.onError = onError;
+    this.onStatus = onStatus;
     this.ws = null;
     this.ready = false; // true once the server acknowledges setup
     this.closedByUs = false;
     this.connecting = null;
     this.reconnectAttempts = 0;
     this.pendingAudio = [];
+    this.resumptionHandle = null;
+    this.connectionNumber = 0;
   }
 
   connect() {
@@ -64,7 +68,12 @@ export class Translator {
         if (msg.setupComplete || msg.setup_complete) {
           this.ready = true;
           this.reconnectAttempts = 0;
-          console.log(`[gemini:${this.targetLanguage}] setup complete`);
+          this.connectionNumber += 1;
+          console.log(
+            `[gemini:${this.targetLanguage}] setup complete ` +
+            `(connection ${this.connectionNumber}${this.resumptionHandle ? ', resumed' : ''})`,
+          );
+          this.onStatus?.('translator-online');
           this.#flushPendingAudio();
           if (!settled) {
             settled = true;
@@ -72,6 +81,7 @@ export class Translator {
           }
           return;
         }
+        this.#handleSessionManagement(msg);
         this.#handleServerContent(msg);
       });
 
@@ -94,7 +104,10 @@ export class Translator {
           settled = true;
           reject(new Error(`closed before setup (${code} ${reason})`));
         }
-        if (!this.closedByUs) this.#scheduleReconnect();
+        if (!this.closedByUs) {
+          this.onStatus?.('translator-reconnecting');
+          this.#scheduleReconnect();
+        }
       });
     });
 
@@ -118,8 +131,26 @@ export class Translator {
         },
         inputAudioTranscription: {},
         outputAudioTranscription: {},
+        // Gemini periodically replaces Live API WebSocket connections. Keep
+        // the same logical session across those replacements so context and
+        // voice continuity have the best chance of surviving the handoff.
+        sessionResumption: this.resumptionHandle ? { handle: this.resumptionHandle } : {},
+        // A sermon can exceed the default audio-only context lifetime.
+        contextWindowCompression: { slidingWindow: {} },
       },
     };
+  }
+
+  #handleSessionManagement(msg) {
+    const update = msg.sessionResumptionUpdate || msg.session_resumption_update;
+    const handle = update?.newHandle || update?.new_handle || update?.token;
+    if (update?.resumable && handle) this.resumptionHandle = handle;
+
+    const goAway = msg.goAway || msg.go_away;
+    if (goAway) {
+      const timeLeft = goAway.timeLeft || goAway.time_left || 'unknown';
+      console.log(`[gemini:${this.targetLanguage}] server GoAway (time left: ${JSON.stringify(timeLeft)})`);
+    }
   }
 
   #parse(raw) {
@@ -208,5 +239,6 @@ export class Translator {
     }
     this.ws = null;
     this.pendingAudio = [];
+    this.resumptionHandle = null;
   }
 }

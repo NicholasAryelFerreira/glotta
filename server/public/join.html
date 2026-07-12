@@ -140,9 +140,9 @@ async function init() {
 }
 langSel.onchange = () => { toggleBtn.disabled = !langSel.value || !sessionReady; };
 
-let ws = null, audioCtx = null, nextPlayTime = 0, listening = false, captionsStarted = false;
+let ws = null, audioCtx = null, playerNode = null, listening = false, captionsStarted = false;
+let audioNeedsTap = false, audioSetupPending = false, hiddenAt = 0;
 let listenerSocketSeq = 0;
-const scheduledSources = new Set();
 const MAX_LIVE_CAPTION_CHARS = 2000;
 
 function appendBoundedText(el, text, maxChars) {
@@ -153,53 +153,72 @@ function appendBoundedText(el, text, maxChars) {
   el.scrollTop = el.scrollHeight;
 }
 
-function base64ToInt16(b64) {
+function base64ToFloat32(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Int16Array(bytes.buffer, 0, Math.floor(bytes.length / 2));
+  const int16 = new Int16Array(bytes.buffer, 0, Math.floor(bytes.length / 2));
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+  return float32;
 }
-
-// Keep playback close to live. Brief buffering prevents crackles, but stale
-// queued audio is dropped quickly so a sermon does not drift seconds behind.
-const TARGET_AUDIO_BUFFER_S = 0.25;
-const MIN_AUDIO_BUFFER_S = 0.08;
-const MAX_AUDIO_BUFFER_S = 1.1;
 
 function clearScheduledAudio() {
-  for (const src of scheduledSources) {
-    try { src.stop(); } catch { /* already stopped */ }
-  }
-  scheduledSources.clear();
-  nextPlayTime = audioCtx ? audioCtx.currentTime + TARGET_AUDIO_BUFFER_S : 0;
+  playerNode?.port.postMessage({ type: 'clear' });
 }
 
-function playChunk(int16) {
-  if (!audioCtx) return;
-  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-  const f32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
-  const buf = audioCtx.createBuffer(1, f32.length, 24000);
-  buf.copyToChannel(f32, 0);
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(audioCtx.destination);
-  const now = audioCtx.currentTime;
-  const queuedAhead = nextPlayTime - now;
-  if (queuedAhead > MAX_AUDIO_BUFFER_S) {
-    clearScheduledAudio();
-  } else if (queuedAhead < MIN_AUDIO_BUFFER_S) {
-    nextPlayTime = now + TARGET_AUDIO_BUFFER_S;
+function playChunk(samples) {
+  if (!audioCtx || !playerNode || audioNeedsTap) return;
+  if (audioCtx.state !== 'running') {
+    if (document.visibilityState === 'visible') requireResumeTap();
+    return;
   }
-  src.onended = () => scheduledSources.delete(src);
-  scheduledSources.add(src);
-  try {
-    src.start(nextPlayTime);
-    nextPlayTime += buf.duration;
-  } catch {
-    scheduledSources.delete(src);
-    nextPlayTime = audioCtx.currentTime + TARGET_AUDIO_BUFFER_S;
+  playerNode.port.postMessage({ type: 'audio', samples }, [samples.buffer]);
+}
+
+async function destroyAudioPlayer() {
+  const ctx = audioCtx;
+  const node = playerNode;
+  audioCtx = null;
+  playerNode = null;
+  try { node?.port.postMessage({ type: 'clear' }); } catch { /* already gone */ }
+  try { node?.disconnect(); } catch { /* already disconnected */ }
+  if (ctx && ctx.state !== 'closed') {
+    try { await ctx.close(); } catch { /* already closed */ }
   }
+}
+
+async function createAudioPlayer() {
+  const ctx = new AudioContext({ latencyHint: 'interactive' });
+  audioCtx = ctx;
+  await ctx.resume();
+  await ctx.audioWorklet.addModule('/listener-player.js');
+  if (audioCtx !== ctx) {
+    try { await ctx.close(); } catch { /* already closed */ }
+    throw new Error('Audio setup was replaced');
+  }
+  const node = new AudioWorkletNode(ctx, 'pcm-stream-player', {
+    numberOfInputs: 0,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+  });
+  node.connect(ctx.destination);
+  playerNode = node;
+  if (ctx.state !== 'running') throw new Error('Audio is still paused');
+}
+
+function showResumePrompt() {
+  toggleLabel.textContent = 'Tap to resume listening';
+  toggleBtn.classList.remove('btn-live');
+  toggleBtn.classList.add('btn-accent');
+  setStatus('offline', 'Audio paused — tap to resume');
+}
+
+function requireResumeTap() {
+  if (!listening || audioNeedsTap) return;
+  audioNeedsTap = true;
+  showResumePrompt();
+  destroyAudioPlayer();
 }
 
 function connect() {
@@ -211,19 +230,24 @@ function connect() {
   socket.onopen = () => {
     if (socket !== ws || socketSeq !== listenerSocketSeq) return;
     errEl.textContent = '';
-    setStatus('listening', 'Listening');
+    if (!audioNeedsTap) setStatus('listening', 'Listening');
   };
   socket.onmessage = (ev) => {
     if (socket !== ws || socketSeq !== listenerSocketSeq) return;
     const msg = JSON.parse(ev.data);
     if (msg.type === 'audio') {
-      playChunk(base64ToInt16(msg.data));
+      playChunk(base64ToFloat32(msg.data));
     } else if (msg.type === 'transcript' && msg.kind === 'output') {
       if (!captionsStarted) { captionsEl.textContent = ''; captionsEl.classList.remove('placeholder'); captionsStarted = true; }
       appendBoundedText(captionsEl, msg.text, MAX_LIVE_CAPTION_CHARS);
     } else if (msg.type === 'status') {
-      if (msg.state === 'speaker-offline') setStatus('offline', 'Speaker reconnecting...');
-      if (msg.state === 'speaker-online') setStatus('listening', 'Listening');
+      if (msg.state === 'speaker-offline' && !audioNeedsTap) setStatus('offline', 'Speaker reconnecting...');
+      if (msg.state === 'speaker-online' && !audioNeedsTap) setStatus('listening', 'Listening');
+      if (msg.state === 'translator-reconnecting') {
+        clearScheduledAudio();
+        if (!audioNeedsTap) setStatus('offline', 'Translation reconnecting...');
+      }
+      if (msg.state === 'translator-online' && !audioNeedsTap) setStatus('listening', 'Listening');
       if (msg.state === 'ended') { setStatus('ended', 'The session has ended'); stop(false); }
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
@@ -234,35 +258,71 @@ function connect() {
     ws = null;
     clearScheduledAudio();
     if (listening) {
-      setStatus('offline', 'Reconnecting...');
+      if (audioNeedsTap) showResumePrompt();
+      else setStatus('offline', 'Reconnecting...');
       setTimeout(() => { if (listening) connect(); }, 1500);
     }
   };
 }
 
-function start() {
-  // AudioContext must be created in the tap handler for iOS Safari to allow playback.
-  audioCtx = new AudioContext();
-  audioCtx.resume();
-  scheduledSources.clear();
-  nextPlayTime = audioCtx.currentTime + TARGET_AUDIO_BUFFER_S;
-  localStorage.setItem(LANG_KEY, langSel.value);
-  listening = true;
-  langSel.disabled = true;
-  toggleLabel.textContent = 'Stop listening';
-  toggleBtn.classList.remove('btn-accent');
-  toggleBtn.classList.add('btn-live');
-  setStatus('connecting', 'Connecting…');
-  connect();
+async function start() {
+  if (audioSetupPending) return;
+  audioSetupPending = true;
+  toggleBtn.disabled = true;
+  errEl.textContent = '';
+  try {
+    // The context is created inside this tap handler for mobile Safari.
+    await createAudioPlayer();
+    localStorage.setItem(LANG_KEY, langSel.value);
+    listening = true;
+    audioNeedsTap = false;
+    langSel.disabled = true;
+    toggleLabel.textContent = 'Stop listening';
+    toggleBtn.classList.remove('btn-accent');
+    toggleBtn.classList.add('btn-live');
+    setStatus('connecting', 'Connecting…');
+    connect();
+  } catch {
+    await destroyAudioPlayer();
+    errEl.textContent = 'Your browser did not start audio. Tap to listen and try again.';
+  } finally {
+    audioSetupPending = false;
+    toggleBtn.disabled = false;
+  }
+}
+
+async function resumeListening() {
+  if (!listening || !audioNeedsTap || audioSetupPending) return;
+  audioSetupPending = true;
+  toggleBtn.disabled = true;
+  errEl.textContent = '';
+  try {
+    await destroyAudioPlayer();
+    await createAudioPlayer();
+    audioNeedsTap = false;
+    toggleLabel.textContent = 'Stop listening';
+    toggleBtn.classList.remove('btn-accent');
+    toggleBtn.classList.add('btn-live');
+    setStatus('listening', 'Listening');
+  } catch {
+    await destroyAudioPlayer();
+    audioNeedsTap = true;
+    showResumePrompt();
+    errEl.textContent = 'Audio is still paused. Tap the button again to retry.';
+  } finally {
+    audioSetupPending = false;
+    toggleBtn.disabled = false;
+  }
 }
 
 function stop(closeWs = true) {
   listening = false;
+  audioNeedsTap = false;
   listenerSocketSeq += 1;
   clearScheduledAudio();
   if (closeWs && ws) ws.close();
-  if (audioCtx) audioCtx.close();
-  ws = audioCtx = null;
+  destroyAudioPlayer();
+  ws = null;
   langSel.disabled = false;
   toggleLabel.textContent = 'Tap to listen';
   toggleBtn.classList.remove('btn-live');
@@ -271,7 +331,32 @@ function stop(closeWs = true) {
   setStatus('hidden');
 }
 
-toggleBtn.onclick = () => (listening ? stop() : start());
+toggleBtn.onclick = () => {
+  if (!listening) start();
+  else if (audioNeedsTap) resumeListening();
+  else stop();
+};
+
+// Mobile browsers may permanently interrupt Web Audio after a page spends
+// time behind another app. Keep captions connected, but after a longer switch
+// require one explicit tap so the replacement AudioContext is created inside
+// a trusted user gesture. Short switches keep the existing behavior.
+const BACKGROUND_RESTART_MS = 10_000;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    hiddenAt = Date.now();
+    return;
+  }
+  if (!listening || audioNeedsTap) return;
+  const hiddenFor = hiddenAt ? Date.now() - hiddenAt : 0;
+  hiddenAt = 0;
+  if (hiddenFor >= BACKGROUND_RESTART_MS || !audioCtx || audioCtx.state !== 'running') {
+    requireResumeTap();
+  } else {
+    clearScheduledAudio();
+  }
+});
+
 init();
 </script>
 </body>

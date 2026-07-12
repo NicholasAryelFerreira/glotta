@@ -181,6 +181,7 @@ function handleSpeaker(ws, session) {
 
   ws.on('close', () => {
     if (session.speakerWs !== ws) return; // replaced by a newer connection
+    if (session.ended) return;
     console.log(`[session:${session.id}] speaker disconnected, grace ${SPEAKER_GRACE_MS / 1000}s`);
     broadcastToAll(session, { type: 'status', state: 'speaker-offline' });
     session.speakerGraceTimer = setTimeout(() => session.end(), SPEAKER_GRACE_MS);

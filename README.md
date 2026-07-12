@@ -26,7 +26,7 @@ Speaker browser/app -> PCM audio over WebSocket -> Node relay server -> Gemini L
 Listener browser <- translated audio + captions over WebSocket
 ```
 
-The server keeps the Gemini API key private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use the Web Audio API to schedule playback close to live while dropping stale queued audio so a sermon does not drift far behind.
+The server keeps the Gemini API key private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use a continuous Web Audio playback queue that stays close to live and drops stale audio rather than drifting far behind.
 
 ## Repository layout
 
@@ -105,9 +105,11 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 
 - Speaker audio is sent as small PCM chunks over WebSockets.
 - Browser speaker input can select external audio interfaces and chooses the strongest channel for sound-board feeds.
-- Listener playback keeps a small buffer for smooth audio but drops stale queued audio to avoid falling far behind.
+- Listener playback uses one continuous PCM queue with a small buffer, smooth underrun recovery, and stale-audio dropping.
+- Listeners returning after a longer phone-app switch are asked to tap once to restart browser audio while captions remain connected.
 - Live transcript and captions are capped in the browser to prevent long sermons from overloading the page.
-- Gemini streams reconnect automatically, with a short catch-up window to avoid losing brief gaps.
+- Gemini streams use session resumption and context compression across periodic connection replacements, with a short catch-up window for brief gaps.
+- A session automatically ends after 60 minutes without incoming speaker audio.
 
 ## License
 
