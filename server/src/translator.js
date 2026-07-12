@@ -8,9 +8,6 @@ const MODEL = 'gemini-3.5-live-translate-preview';
 // back in the default language (English). Speaking the protocol directly lets
 // us send the translation config exactly as documented.
 const API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
-// Pin one prebuilt voice so the listener hears the same voice after the
-// automatic reconnects forced by Gemini's per-connection time limit.
-const VOICE_NAME = process.env.GEMINI_VOICE || 'Orus';
 const WS_BASE = 'wss://generativelanguage.googleapis.com';
 const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
 const PENDING_AUDIO_CHUNK_LIMIT = 15; // about 1.5 seconds of 100 ms speaker chunks
@@ -114,9 +111,6 @@ export class Translator {
         model: `models/${MODEL}`,
         generationConfig: {
           responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE_NAME } },
-          },
           translationConfig: {
             targetLanguageCode: this.targetLanguage,
             echoTargetLanguage: this.echoTargetLanguage,

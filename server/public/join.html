@@ -211,7 +211,7 @@ function connect() {
   socket.onopen = () => {
     if (socket !== ws || socketSeq !== listenerSocketSeq) return;
     errEl.textContent = '';
-    if (!resumeTapArmed) setStatus('listening', 'Listening');
+    setStatus('listening', 'Listening');
   };
   socket.onmessage = (ev) => {
     if (socket !== ws || socketSeq !== listenerSocketSeq) return;
@@ -223,7 +223,7 @@ function connect() {
       appendBoundedText(captionsEl, msg.text, MAX_LIVE_CAPTION_CHARS);
     } else if (msg.type === 'status') {
       if (msg.state === 'speaker-offline') setStatus('offline', 'Speaker reconnecting...');
-      if (msg.state === 'speaker-online' && !resumeTapArmed) setStatus('listening', 'Listening');
+      if (msg.state === 'speaker-online') setStatus('listening', 'Listening');
       if (msg.state === 'ended') { setStatus('ended', 'The session has ended'); stop(false); }
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
@@ -272,51 +272,6 @@ function stop(closeWs = true) {
 }
 
 toggleBtn.onclick = () => (listening ? stop() : start());
-
-// Mobile browsers suspend (iOS: "interrupt") the AudioContext once the tab
-// has been in the background for a while; captions keep streaming but playback
-// stays silent. On return, try to resume in place, then rebuild the context
-// from scratch, and as a last resort ask for a tap — resuming inside a real
-// touch gesture is the one path iOS always allows.
-let resumeTapArmed = false;
-
-function armResumeTap() {
-  if (resumeTapArmed) return;
-  resumeTapArmed = true;
-  setStatus('offline', 'Tap anywhere to unmute');
-  const onTap = () => {
-    document.removeEventListener('pointerdown', onTap);
-    resumeTapArmed = false;
-    if (!listening) return;
-    if (!audioCtx || audioCtx.state === 'closed') {
-      audioCtx = new AudioContext();
-      scheduledSources.clear();
-    }
-    audioCtx.resume().catch(() => {});
-    clearScheduledAudio();
-    setStatus('listening', 'Listening');
-  };
-  document.addEventListener('pointerdown', onTap);
-}
-
-async function ensureAudioRunning() {
-  if (!listening || !audioCtx) return;
-  clearScheduledAudio(); // drop backlog so playback rejoins the live edge
-  try { await audioCtx.resume(); } catch { /* handled below */ }
-  await new Promise((r) => setTimeout(r, 350));
-  if (!listening || !audioCtx || audioCtx.state === 'running') return;
-  try { audioCtx.close(); } catch { /* already closed */ }
-  audioCtx = new AudioContext();
-  scheduledSources.clear();
-  nextPlayTime = audioCtx.currentTime + TARGET_AUDIO_BUFFER_S;
-  try { await audioCtx.resume(); } catch { /* fall through */ }
-  if (audioCtx.state !== 'running') armResumeTap();
-}
-
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') ensureAudioRunning();
-});
-
 init();
 </script>
 </body>
