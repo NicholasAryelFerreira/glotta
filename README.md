@@ -108,7 +108,7 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 - Listener playback uses one continuous PCM queue with a small buffer, smooth underrun recovery, and stale-audio dropping.
 - Listeners returning after a longer phone-app switch are asked to tap once to restart browser audio while captions remain connected.
 - Live transcript and captions are capped in the browser to prevent long sermons from overloading the page.
-- Gemini streams use session resumption, context compression, and graceful `GoAway` handoffs across periodic connection replacements, with a short catch-up window for brief gaps.
+- Gemini streams use session resumption and context compression across periodic connection replacements, with a short catch-up window for brief gaps.
 - A session automatically ends after 60 minutes without incoming speaker audio.
 
 ## License
