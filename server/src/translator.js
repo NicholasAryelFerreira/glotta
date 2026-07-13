@@ -10,7 +10,10 @@ const MODEL = 'gemini-3.5-live-translate-preview';
 const API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
 const WS_BASE = 'wss://generativelanguage.googleapis.com';
 const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
-const PENDING_AUDIO_CHUNK_LIMIT = 15; // about 1.5 seconds of 100 ms speaker chunks
+const PENDING_AUDIO_CHUNK_LIMIT = 30; // about 3 seconds of 100 ms speaker chunks
+const GO_AWAY_QUIET_WINDOW_MS = 1_200;
+const GO_AWAY_SAFETY_MARGIN_MS = 5_000;
+const DEFAULT_GO_AWAY_TIME_LEFT_MS = 30_000;
 
 /**
  * Wraps one Gemini Live translation session for a single target language.
@@ -31,8 +34,18 @@ export class Translator {
    * @param {(kind: 'input'|'output', text: string) => void} opts.onTranscript
    * @param {(err: Error) => void} opts.onError
    * @param {(state: 'translator-online'|'translator-reconnecting') => void} [opts.onStatus]
+   * @param {string} [opts.wsBase] Test-only WebSocket origin override
    */
-  constructor({ apiKey, targetLanguage, echoTargetLanguage = false, onAudio, onTranscript, onError, onStatus }) {
+  constructor({
+    apiKey,
+    targetLanguage,
+    echoTargetLanguage = false,
+    onAudio,
+    onTranscript,
+    onError,
+    onStatus,
+    wsBase = WS_BASE,
+  }) {
     this.apiKey = apiKey;
     this.targetLanguage = targetLanguage;
     this.echoTargetLanguage = echoTargetLanguage;
@@ -40,6 +53,7 @@ export class Translator {
     this.onTranscript = onTranscript;
     this.onError = onError;
     this.onStatus = onStatus;
+    this.wsBase = wsBase;
     this.ws = null;
     this.ready = false; // true once the server acknowledges setup
     this.closedByUs = false;
@@ -48,12 +62,18 @@ export class Translator {
     this.pendingAudio = [];
     this.resumptionHandle = null;
     this.connectionNumber = 0;
+    this.lastOutputAt = Date.now();
+    this.rolloverPending = false;
+    this.plannedRollover = false;
+    this.goAwayDeadlineAt = 0;
+    this.goAwayDeadlineTimer = null;
+    this.goAwayQuietTimer = null;
   }
 
   connect() {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
-      const url = `${WS_BASE}/ws/google.ai.generativelanguage.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+      const url = `${this.wsBase}/ws/google.ai.generativelanguage.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
       const ws = new WebSocket(url);
       this.ws = ws;
       let settled = false;
@@ -97,6 +117,9 @@ export class Translator {
 
       ws.on('close', (code, reasonBuf) => {
         const reason = reasonBuf?.toString?.() || '';
+        const plannedRollover = this.plannedRollover;
+        this.plannedRollover = false;
+        this.#clearGoAwayState();
         console.log(`[gemini:${this.targetLanguage}] closed (${code}${reason ? ' ' + reason : ''})`);
         this.ready = false;
         this.ws = null;
@@ -106,7 +129,7 @@ export class Translator {
         }
         if (!this.closedByUs) {
           this.onStatus?.('translator-reconnecting');
-          this.#scheduleReconnect();
+          this.#scheduleReconnect(plannedRollover ? 0 : undefined);
         }
       });
     });
@@ -147,10 +170,92 @@ export class Translator {
     if (update?.resumable && handle) this.resumptionHandle = handle;
 
     const goAway = msg.goAway || msg.go_away;
-    if (goAway) {
-      const timeLeft = goAway.timeLeft || goAway.time_left || 'unknown';
-      console.log(`[gemini:${this.targetLanguage}] server GoAway (time left: ${JSON.stringify(timeLeft)})`);
+    if (goAway) this.#scheduleGoAwayRollover(goAway.timeLeft || goAway.time_left);
+  }
+
+  #durationToMs(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, value * 1000);
+    if (typeof value === 'string') {
+      const match = value.trim().match(/^([0-9]+(?:\.[0-9]+)?)s$/);
+      if (match) return Number(match[1]) * 1000;
     }
+    if (value && typeof value === 'object') {
+      const seconds = Number(value.seconds ?? value.sec ?? 0);
+      const nanos = Number(value.nanos ?? value.nanoseconds ?? 0);
+      if (Number.isFinite(seconds) && Number.isFinite(nanos)) {
+        return Math.max(0, seconds * 1000 + nanos / 1_000_000);
+      }
+    }
+    return DEFAULT_GO_AWAY_TIME_LEFT_MS;
+  }
+
+  #scheduleGoAwayRollover(timeLeft) {
+    if (this.closedByUs || this.rolloverPending || this.plannedRollover) return;
+    const timeLeftMs = this.#durationToMs(timeLeft);
+    this.rolloverPending = true;
+    this.goAwayDeadlineAt = Date.now() + timeLeftMs;
+    console.log(
+      `[gemini:${this.targetLanguage}] server GoAway ` +
+      `(time left: ${Math.round(timeLeftMs / 1000)}s); scheduling graceful rollover`,
+    );
+
+    const hardDelay = Math.max(0, timeLeftMs - GO_AWAY_SAFETY_MARGIN_MS);
+    this.goAwayDeadlineTimer = setTimeout(
+      () => this.#beginControlledRollover('deadline'),
+      hardDelay,
+    );
+    this.#scheduleQuietRolloverCheck();
+  }
+
+  #scheduleQuietRolloverCheck() {
+    if (!this.rolloverPending || this.closedByUs) return;
+    if (this.goAwayQuietTimer) clearTimeout(this.goAwayQuietTimer);
+    const hardAt = this.goAwayDeadlineAt - GO_AWAY_SAFETY_MARGIN_MS;
+    if (Date.now() >= hardAt) return; // the deadline timer owns this path
+    const quietFor = Date.now() - this.lastOutputAt;
+    const delay = Math.max(0, GO_AWAY_QUIET_WINDOW_MS - quietFor);
+    this.goAwayQuietTimer = setTimeout(() => {
+      if (!this.rolloverPending || this.closedByUs) return;
+      if (!this.resumptionHandle) {
+        // Give Gemini a little longer to provide a resumable handle, without
+        // ever waiting beyond the hard rollover deadline.
+        this.goAwayQuietTimer = setTimeout(() => this.#scheduleQuietRolloverCheck(), 250);
+        return;
+      }
+      if (Date.now() - this.lastOutputAt >= GO_AWAY_QUIET_WINDOW_MS) {
+        this.#beginControlledRollover('quiet audio boundary');
+      } else {
+        this.#scheduleQuietRolloverCheck();
+      }
+    }, delay);
+  }
+
+  #beginControlledRollover(reason) {
+    if (!this.rolloverPending || this.plannedRollover || this.closedByUs) return;
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    this.#clearGoAwayState();
+    this.plannedRollover = true;
+    this.ready = false; // speaker audio is buffered until the resumed setup completes
+    console.log(`[gemini:${this.targetLanguage}] starting graceful rollover (${reason})`);
+    try {
+      ws.close(1000, 'graceful GoAway rollover');
+    } catch (err) {
+      console.error(`[gemini:${this.targetLanguage}] graceful rollover close failed:`, err.message);
+      this.plannedRollover = false;
+      this.ws = null;
+      this.onStatus?.('translator-reconnecting');
+      this.#scheduleReconnect(0);
+    }
+  }
+
+  #clearGoAwayState() {
+    if (this.goAwayDeadlineTimer) clearTimeout(this.goAwayDeadlineTimer);
+    if (this.goAwayQuietTimer) clearTimeout(this.goAwayQuietTimer);
+    this.goAwayDeadlineTimer = null;
+    this.goAwayQuietTimer = null;
+    this.goAwayDeadlineAt = 0;
+    this.rolloverPending = false;
   }
 
   #parse(raw) {
@@ -174,20 +279,34 @@ export class Translator {
 
     const turn = content.modelTurn || content.model_turn;
     const parts = turn?.parts ?? [];
+    let receivedAudio = false;
     for (const part of parts) {
       const inline = part.inlineData || part.inline_data;
-      if (inline?.data) this.onAudio?.(inline.data);
+      if (inline?.data) {
+        receivedAudio = true;
+        this.onAudio?.(inline.data);
+      }
+    }
+    if (receivedAudio) {
+      this.lastOutputAt = Date.now();
+      if (this.rolloverPending) this.#scheduleQuietRolloverCheck();
+    }
+
+    const generationComplete = content.generationComplete || content.generation_complete;
+    const turnComplete = content.turnComplete || content.turn_complete;
+    if (this.rolloverPending && this.resumptionHandle && (generationComplete || turnComplete)) {
+      this.#beginControlledRollover('generation boundary');
     }
   }
 
-  #scheduleReconnect() {
+  #scheduleReconnect(delayOverride) {
     if (this.closedByUs) return;
     this.reconnectAttempts += 1;
     if (this.reconnectAttempts > 5) {
       this.onError?.(new Error(`Translation for ${this.targetLanguage} could not be re-established`));
       return;
     }
-    const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 10000);
+    const delay = delayOverride ?? Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 10000);
     console.log(`[gemini:${this.targetLanguage}] reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
     setTimeout(() => {
       if (this.closedByUs) return;
@@ -232,6 +351,8 @@ export class Translator {
   close() {
     this.closedByUs = true;
     this.ready = false;
+    this.#clearGoAwayState();
+    this.plannedRollover = false;
     try {
       this.ws?.close();
     } catch {
