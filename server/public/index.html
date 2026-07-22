@@ -102,6 +102,14 @@ fetch('/api/config')
   })
   .catch(() => { weeklyBtn.style.display = 'none'; });
 
+// Browsers can restore this page from the back-forward cache with the exact
+// disabled state it had just before navigating to the speaker page.
+window.addEventListener('pageshow', () => {
+  startBtn.disabled = false;
+  weeklyBtn.disabled = !weeklySessionId;
+  tierInputs.forEach((input) => { input.disabled = false; });
+});
+
 async function startSession(sessionId) {
   const title = document.getElementById('title').value.trim();
   const password = pwdEl.value;
