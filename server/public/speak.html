@@ -103,6 +103,8 @@
       <div class="audio-meter-track"><span class="audio-meter-fill" id="audioMeterFill"></span></div>
     </div>
 
+    <div class="err" id="err" role="alert" aria-live="polite"></div>
+
     <div class="stat-row">
       <span class="stat-big" id="stats">No listeners yet</span>
     </div>
@@ -116,7 +118,6 @@
       <div class="transcript-body placeholder" id="transcript">The live transcript appears here once the model hears audio.</div>
     </div>
 
-    <div class="err" id="err"></div>
     <div class="spacer"></div>
     <button class="btn btn-ghost" id="endBtn" style="max-width:200px">End session</button>
   </div>
@@ -295,6 +296,43 @@ function setStatus(state) {
 let ws = null, audioCtx = null, workletNode = null, mediaStream = null;
 let speakerSocketSeq = 0;
 let transcriptStarted = false;
+let speakerClaimed = false;
+let claimResolver = null;
+let claimTimer = null;
+const SPEAKER_CLAIM_TIMEOUT_MS = 10_000;
+
+function finishSpeakerClaim(granted, message = '') {
+  speakerClaimed = granted;
+  if (claimTimer) clearTimeout(claimTimer);
+  claimTimer = null;
+  const resolve = claimResolver;
+  claimResolver = null;
+  if (message) errEl.textContent = message;
+  if (resolve) resolve(granted);
+}
+
+function requestSpeakerClaim() {
+  if (speakerClaimed) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    claimResolver = resolve;
+    claimTimer = setTimeout(() => {
+      finishSpeakerClaim(false, 'Could not reserve the audio input. Check the connection and try again.');
+    }, SPEAKER_CLAIM_TIMEOUT_MS);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'start-speaking' }));
+    } else {
+      connectWs();
+    }
+  });
+}
+
+function releaseSpeakerClaim() {
+  if (speakerClaimed && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'stop-speaking' }));
+  }
+  speakerClaimed = false;
+}
+
 
 // AudioWorklet that resamples mic input to 16 kHz mono Int16 and emits ~100 ms chunks.
 const workletCode = `
@@ -407,7 +445,22 @@ function connectWs() {
     } else if (msg.type === 'transcript' && msg.kind === 'input') {
       if (!transcriptStarted) { transcriptEl.textContent = ''; transcriptEl.classList.remove('placeholder'); transcriptStarted = true; }
       appendBoundedText(transcriptEl, msg.text, MAX_LIVE_TRANSCRIPT_CHARS);
+    } else if (msg.type === 'speaker-claim' && msg.state === 'granted') {
+      const claimExpected = Boolean(claimResolver) || running || startPending;
+      finishSpeakerClaim(true);
+      if (!claimExpected) {
+        releaseSpeakerClaim();
+        return;
+      }
+      if (running) setStatus('live');
     } else if (msg.type === 'error') {
+      if (msg.code === 'speaker-busy') {
+        const busyMessage = msg.message || 'Another device is capturing audio for this session.';
+        finishSpeakerClaim(false, busyMessage);
+        if (running) stop(false);
+        errEl.textContent = busyMessage;
+        return;
+      }
       errEl.textContent = msg.message;
       if (/not found/i.test(msg.message)) {
         // The server restarted and lost the session - recreate it under the
@@ -419,22 +472,33 @@ function connectWs() {
   socket.onclose = () => {
     if (socket !== ws || socketSeq !== speakerSocketSeq) return;
     ws = null;
+    speakerClaimed = false;
     if (!pageActive) return;
     if (running) { errEl.textContent = 'Connection lost - reconnecting...'; setStatus('connecting'); }
     setTimeout(() => { if (pageActive && !ws) connectWs(); }, 1500);
   };
   socket.onopen = () => {
     if (socket !== ws || socketSeq !== speakerSocketSeq) return;
-    errEl.textContent = '';
-    if (running) setStatus('live');
+    if (!claimResolver && !running) errEl.textContent = '';
+    if (claimResolver || running) socket.send(JSON.stringify({ type: 'start-speaking' }));
   };
 }
 
-let running = false;
+let running = false, startPending = false;
 
 async function start() {
+  if (startPending) return;
+  startPending = true;
+  toggleBtn.disabled = true;
   errEl.textContent = '';
   setStatus('connecting');
+  const claimed = await requestSpeakerClaim();
+  if (!claimed) {
+    setStatus('paused');
+    startPending = false;
+    toggleBtn.disabled = false;
+    return;
+  }
   // A clean external feed (e.g. a sound board via USB) is sent untouched; the
   // laptop's own mic keeps echo/noise/gain processing on for the room.
   const clean = selectedIsClean();
@@ -449,7 +513,10 @@ async function start() {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio });
   } catch (e) {
     errEl.textContent = 'Microphone access denied. Note: browsers only allow the mic on https or on localhost.';
+    releaseSpeakerClaim();
     setStatus('paused');
+    startPending = false;
+    toggleBtn.disabled = false;
     return;
   }
   // Now that permission is granted, fill in the real device names.
@@ -462,29 +529,31 @@ async function start() {
   workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
   workletNode.port.onmessage = (ev) => {
     updateAudioMeter(ev.data);
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (running && speakerClaimed && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'audio', data: int16ToBase64(ev.data) }));
     }
   };
   source.connect(workletNode);
   running = true;
   setAudioMeterVisible(true);
-  if (!ws || (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CONNECTING)) connectWs(); // reuse the presence connection if it's open/connecting
   toggleLabel.textContent = 'Stop speaking';
   toggleBtn.classList.remove('btn-accent');
   toggleBtn.classList.add('btn-live');
-  setStatus(ws && ws.readyState === WebSocket.OPEN ? 'live' : 'connecting');
+  setStatus(speakerClaimed ? 'live' : 'connecting');
+  startPending = false;
+  toggleBtn.disabled = false;
 }
 
-function stop() {
+function stop(releaseClaim = true) {
   running = false;
+  if (releaseClaim) releaseSpeakerClaim();
   if (workletNode) workletNode.disconnect();
   if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
   if (audioCtx) audioCtx.close();
   workletNode = mediaStream = audioCtx = null;
   micSel.disabled = false;
   setAudioMeterVisible(false);
-  // Keep the WebSocket open: pausing the mic shouldn't drop the session.
+  // Keep the presence WebSocket open while releasing the audio-input lock.
   toggleLabel.textContent = 'Start speaking';
   toggleBtn.classList.remove('btn-live');
   toggleBtn.classList.add('btn-accent');

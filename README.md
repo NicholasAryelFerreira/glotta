@@ -118,6 +118,7 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 ## Reliability details
 
 - Speaker audio is sent as small PCM chunks over WebSockets.
+- Only one device can capture speaker audio for a session at a time; the lock starts with **Start speaking** and is released by **Stop speaking** or a disconnect.
 - Browser speaker input can select external audio interfaces and chooses the strongest channel for sound-board feeds.
 - Listener playback uses one continuous PCM queue with a small buffer, smooth underrun recovery, and stale-audio dropping.
 - Listeners returning after a longer phone-app switch are asked to tap once to restart browser audio while captions remain connected.

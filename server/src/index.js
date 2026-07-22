@@ -169,16 +169,35 @@ wss.on('connection', async (ws, req) => {
   }
 });
 
-function handleSpeaker(ws, session) {
-  session.attachSpeaker(ws);
+const SPEAKER_BUSY_MESSAGE = 'Another device is capturing audio for this session.';
+
+function claimSpeakerInput(ws, session) {
+  const wasAlreadyClaimed = session.speakerWs === ws;
+  if (!session.claimSpeaker(ws)) {
+    if (!ws.speakerBusyNotified) {
+      ws.send(JSON.stringify({ type: 'error', code: 'speaker-busy', message: SPEAKER_BUSY_MESSAGE }));
+      ws.speakerBusyNotified = true;
+    }
+    return false;
+  }
   if (session.speakerGraceTimer) {
     clearTimeout(session.speakerGraceTimer);
     session.speakerGraceTimer = null;
   }
-  console.log(`[session:${session.id}] speaker connected`);
+  ws.speakerBusyNotified = false;
+  ws.send(JSON.stringify({ type: 'speaker-claim', state: 'granted' }));
+  if (!wasAlreadyClaimed) {
+    console.log(`[session:${session.id}] speaker audio claimed`);
+    broadcastToAll(session, { type: 'status', state: 'speaker-online' });
+  }
+  return true;
+}
+
+function handleSpeaker(ws, session) {
+  session.addSpeakerSocket(ws);
+  console.log(`[session:${session.id}] speaker page connected`);
   ws.send(JSON.stringify({ type: 'status', state: 'connected', sessionId: session.id }));
   session.notifySpeakerStats();
-  broadcastToAll(session, { type: 'status', state: 'speaker-online' });
 
   ws.on('message', (raw) => {
     let msg;
@@ -187,7 +206,16 @@ function handleSpeaker(ws, session) {
     } catch {
       return;
     }
-    if (msg.type === 'audio' && typeof msg.data === 'string') {
+    if (msg.type === 'start-speaking') {
+      ws.speakerBusyNotified = false;
+      claimSpeakerInput(ws, session);
+    } else if (msg.type === 'stop-speaking') {
+      if (session.releaseSpeaker(ws)) {
+        console.log(`[session:${session.id}] speaker audio released`);
+        broadcastToAll(session, { type: 'status', state: 'speaker-offline' });
+      }
+    } else if (msg.type === 'audio' && typeof msg.data === 'string') {
+      if (session.speakerWs !== ws && !claimSpeakerInput(ws, session)) return;
       session.pushAudio(msg.data);
     } else if (msg.type === 'end') {
       session.end();
@@ -195,9 +223,10 @@ function handleSpeaker(ws, session) {
   });
 
   ws.on('close', () => {
-    if (session.speakerWs !== ws) return; // replaced by a newer connection
+    session.removeSpeakerSocket(ws);
+    if (!session.releaseSpeaker(ws)) return;
     if (session.ended) return;
-    console.log(`[session:${session.id}] speaker disconnected, grace ${SPEAKER_GRACE_MS / 1000}s`);
+    console.log(`[session:${session.id}] active speaker disconnected, grace ${SPEAKER_GRACE_MS / 1000}s`);
     broadcastToAll(session, { type: 'status', state: 'speaker-offline' });
     session.speakerGraceTimer = setTimeout(() => session.end(), SPEAKER_GRACE_MS);
   });

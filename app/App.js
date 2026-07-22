@@ -47,6 +47,7 @@ export default function App() {
   const wsRef = useRef(null);
   const wsSeqRef = useRef(0);
   const speakingRef = useRef(false);
+  const speakerClaimedRef = useRef(false);
 
   // One audio stream, created once. onBuffer reads the live WebSocket from a
   // ref so we always send to the current connection.
@@ -56,7 +57,7 @@ export default function App() {
     encoding: 'int16',
     onBuffer: (buf) => {
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (speakerClaimedRef.current && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'audio', data: arrayBufferToBase64(buf.data) }));
       }
     },
@@ -122,7 +123,7 @@ export default function App() {
     wsRef.current = ws;
     ws.onopen = () => {
       if (wsRef.current !== ws || wsSeqRef.current !== seq) return;
-      setConnected(true);
+      ws.send(JSON.stringify({ type: 'start-speaking' }));
     };
     ws.onmessage = (ev) => {
       if (wsRef.current !== ws || wsSeqRef.current !== seq) return;
@@ -132,11 +133,29 @@ export default function App() {
       } catch {
         return;
       }
-      if (msg.type === 'stats') {
+      if (msg.type === 'speaker-claim' && msg.state === 'granted') {
+        speakerClaimedRef.current = true;
+        setConnected(true);
+      } else if (msg.type === 'stats') {
         setStats({ total: msg.total, listeners: msg.listeners });
       } else if (msg.type === 'transcript' && msg.kind === 'input') {
         setTranscript((t) => (t + msg.text).slice(-1000));
       } else if (msg.type === 'error') {
+        if (msg.code === 'speaker-busy') {
+          speakerClaimedRef.current = false;
+          speakingRef.current = false;
+          setSpeaking(false);
+          setConnected(false);
+          try {
+            stream.stop();
+          } catch {
+            // not streaming
+          }
+          ws.close();
+          if (wsRef.current === ws) wsRef.current = null;
+          Alert.alert('Audio input in use', msg.message || 'Another device is capturing audio for this session.');
+          return;
+        }
         if (/not found/i.test(msg.message || '')) {
           reviveSession().then((ok) => {
             if (ok) return;
@@ -158,6 +177,7 @@ export default function App() {
     ws.onclose = () => {
       if (wsRef.current !== ws || wsSeqRef.current !== seq) return;
       wsRef.current = null;
+      speakerClaimedRef.current = false;
       setConnected(false);
       // Auto-reconnect while the speaker still intends to be live.
       if (speakingRef.current) setTimeout(() => { if (speakingRef.current) connectWs(); }, 1500);
@@ -166,6 +186,10 @@ export default function App() {
   }, [session, serverUrl, reviveSession, stream]);
 
   const stopSpeaking = useCallback(() => {
+    if (speakerClaimedRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'stop-speaking' }));
+    }
+    speakerClaimedRef.current = false;
     speakingRef.current = false;
     wsSeqRef.current += 1;
     setSpeaking(false);

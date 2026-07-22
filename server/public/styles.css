@@ -142,9 +142,9 @@ select.input option { color: #16122b; }
 .btn-primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: 0 12px 30px -12px rgba(109, 93, 211, 0.9); }
 .btn-accent { background: linear-gradient(135deg, var(--acc-1), var(--acc-2)); color: #0c1830; box-shadow: 0 12px 30px -12px rgba(86, 200, 245, 0.8); }
 .session-action-content {
-  width: min(100%, 240px);
+  width: min(100%, 220px);
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 22px;
+  grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
   column-gap: 8px;
 }

@@ -116,7 +116,9 @@ class Session {
     this.apiTier = normalizeApiTier(apiTier);
     this.apiKey = manager.apiKeyForTier(this.apiTier);
     this.createdAt = Date.now();
+    this.speakerSockets = new Set();
     this.speakerWs = null;
+    this.speakerGraceTimer = null;
     this.channels = new Map(); // lang -> LanguageChannel
     this.transcriptChannel = null; // listener channel that mirrors input transcripts to the speaker as a fallback
     this.speakerTranscriptTranslator = null; // hidden Gemini stream for speaker transcript even with no listeners
@@ -139,11 +141,33 @@ class Session {
     }, delay);
   }
 
-  attachSpeaker(ws) {
-    if (this.speakerWs && this.speakerWs.readyState === this.speakerWs.OPEN) {
-      this.speakerWs.close(4000, 'replaced by a new speaker connection');
-    }
+  addSpeakerSocket(ws) {
+    this.speakerSockets.add(ws);
+  }
+
+  removeSpeakerSocket(ws) {
+    this.speakerSockets.delete(ws);
+  }
+
+  claimSpeaker(ws) {
+    if (this.speakerWs === ws) return true;
+    if (this.speakerWs && this.speakerWs.readyState === this.speakerWs.OPEN) return false;
+    this.speakerSockets.add(ws);
     this.speakerWs = ws;
+    return true;
+  }
+
+  releaseSpeaker(ws) {
+    if (this.speakerWs !== ws) return false;
+    this.speakerWs = null;
+    return true;
+  }
+
+  sendToSpeakers(obj) {
+    const payload = JSON.stringify(obj);
+    for (const ws of this.speakerSockets) {
+      if (ws.readyState === ws.OPEN) ws.send(payload);
+    }
   }
 
   sendToSpeaker(obj) {
@@ -226,7 +250,7 @@ class Session {
       listeners[lang] = channel.listeners.size;
       total += channel.listeners.size;
     }
-    this.sendToSpeaker({ type: 'stats', total, listeners });
+    this.sendToSpeakers({ type: 'stats', total, listeners });
   }
 
   end(reason = 'ended by speaker') {
@@ -239,9 +263,11 @@ class Session {
     this.speakerTranscriptTranslator?.close();
     this.speakerTranscriptTranslator = null;
     for (const lang of [...this.channels.keys()]) this.closeChannel(lang);
-    if (this.speakerWs && this.speakerWs.readyState === this.speakerWs.OPEN) {
-      this.speakerWs.close(1000, 'session ended');
+    for (const ws of this.speakerSockets) {
+      if (ws.readyState === ws.OPEN) ws.close(1000, 'session ended');
     }
+    this.speakerSockets.clear();
+    this.speakerWs = null;
     this.manager.sessions.delete(this.id);
     console.log(`[session:${this.id}] ended (${reason})`);
   }
