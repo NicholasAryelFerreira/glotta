@@ -316,7 +316,7 @@ export default function App() {
       <View style={styles.transcriptBox}>
         <Text style={styles.transcriptLabel}>What the model hears</Text>
         <Text style={styles.transcriptText}>
-          {transcript || 'The live transcript appears here once Gemini hears audio.'}
+          {transcript || 'The live transcript appears here once the model hears audio.'}
         </Text>
       </View>
 

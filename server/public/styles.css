@@ -141,6 +141,9 @@ select.input option { color: #16122b; }
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn-primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: 0 12px 30px -12px rgba(109, 93, 211, 0.9); }
 .btn-accent { background: linear-gradient(135deg, var(--acc-1), var(--acc-2)); color: #0c1830; box-shadow: 0 12px 30px -12px rgba(86, 200, 245, 0.8); }
+.weekly-session-btn { position: relative; }
+.weekly-session-btn svg { position: absolute; left: 20px; }
+.weekly-session-btn span { width: 100%; text-align: center; }
 .btn-live { background: linear-gradient(135deg, #ff7a87, var(--live)); box-shadow: 0 12px 30px -12px rgba(255, 92, 108, 0.85); }
 .btn-ghost { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--card-brd); color: var(--muted); font-weight: 600; }
 
@@ -225,6 +228,7 @@ select.input option { color: #16122b; }
 .err {
   color: #ffb4bc; font-size: 13.5px; text-align: center; min-height: 18px; line-height: 1.45;
 }
+.password-error { margin: 7px 2px 0; text-align: left; }
 
 .spacer { flex: 1; }
 .footer-note { font-size: 12px; color: var(--faint); text-align: center; }
