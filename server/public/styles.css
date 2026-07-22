@@ -144,6 +144,63 @@ select.input option { color: #16122b; }
 .btn-live { background: linear-gradient(135deg, #ff7a87, var(--live)); box-shadow: 0 12px 30px -12px rgba(255, 92, 108, 0.85); }
 .btn-ghost { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--card-brd); color: var(--muted); font-weight: 600; }
 
+.tier-picker {
+  border: 0;
+  padding: 0;
+  margin: 18px 0 0;
+}
+.tier-picker legend {
+  width: 100%;
+  padding: 0;
+  margin: 0 0 8px 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.tier-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--card-brd);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.04);
+}
+.tier-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.tier-toggle label {
+  padding: 11px 14px;
+  border-radius: 11px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+  transition: color 0.18s, background 0.18s, box-shadow 0.18s;
+}
+.tier-toggle input:checked + label {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(139, 123, 240, 0.9), rgba(109, 93, 211, 0.9));
+  box-shadow: 0 8px 18px -12px rgba(109, 93, 211, 0.95);
+}
+.tier-toggle input:focus-visible + label {
+  outline: 2px solid var(--acc-2);
+  outline-offset: 2px;
+}
+.tier-toggle input:disabled + label { opacity: 0.5; cursor: default; }
+.tier-note {
+  min-height: 58px;
+  margin: 10px 2px 0;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .hint { font-size: 13px; color: var(--faint); text-align: center; line-height: 1.5; max-width: 340px; }
 
 /* Status pill */

@@ -155,6 +155,7 @@ joinUrlEl.textContent = joinLink.replace(/^https?:\/\//, '');
 let pageActive = true;
 
 const TITLE_KEY = 'glotta.title.' + sessionId;
+const API_TIER_KEY = 'glotta.apiTier.' + sessionId;
 
 // Recreate this exact session if the server has lost it. Render's free tier
 // wipes in-memory sessions on restart/spin-down; since the speaker owns the
@@ -163,11 +164,12 @@ const TITLE_KEY = 'glotta.title.' + sessionId;
 async function reviveSession() {
   const password = localStorage.getItem('glotta.pwd') || '';
   const title = localStorage.getItem(TITLE_KEY) || '';
+  const apiTier = localStorage.getItem(API_TIER_KEY) === 'paid' ? 'paid' : 'free';
   try {
     const r = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, password, title }),
+      body: JSON.stringify({ sessionId, password, title, apiTier }),
     });
     return r.ok;
   } catch { return false; }
@@ -190,6 +192,7 @@ async function loadSession() {
   if (d && d.title) {
     document.getElementById('title').textContent = d.title;
     localStorage.setItem(TITLE_KEY, d.title); // remembered so revival can restore it
+    localStorage.setItem(API_TIER_KEY, d.apiTier === 'paid' ? 'paid' : 'free');
   }
   // Load the QR only once we know the session exists, so a dead session shows
   // the message instead of a broken image.

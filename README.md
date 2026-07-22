@@ -13,6 +13,7 @@ Glotta is a real-time sermon translation app powered by Google's `gemini-3.5-liv
 - Creates a speaker-led translation session with a QR join link.
 - Streams microphone or sound-board audio to a Node.js relay server over WebSockets.
 - Uses Gemini Live Translate to generate translated speech and captions.
+- Defaults each new session to the free Gemini key, with an explicit paid option for sensitive or confidential content.
 - Supports multiple listener languages at the same time, with one shared Gemini stream per language.
 - Lets listeners join from a browser without installing an app.
 - Shows the speaker live listener counts, an audio input meter, and a bounded source transcript.
@@ -26,7 +27,18 @@ Speaker browser/app -> PCM audio over WebSocket -> Node relay server -> Gemini L
 Listener browser <- translated audio + captions over WebSocket
 ```
 
-The server keeps the Gemini API key private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use a continuous Web Audio playback queue that stays close to live and drops stale audio rather than drifting far behind.
+The server keeps both Gemini API keys private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use a continuous Web Audio playback queue that stays close to live and drops stale audio rather than drifting far behind.
+
+## Free and paid Gemini options
+
+The browser landing page shows a Free/Paid toggle below the weekly-session button. Free is selected on every fresh visit and is also the server fallback when a client does not send a selection.
+
+| Option | When it is used | User guidance |
+| --- | --- | --- |
+| Free | Default for new and weekly sessions | Transmitted data is used to improve Google products. Use only with content that is not confidential. |
+| Paid | Only after the speaker manually selects Paid | Use with discretion because it charges the app administrator. Appropriate for sensitive or confidential content; the data is not stored. |
+
+The browser sends only the selected option to Glotta. Both API keys remain on the relay server, and every Gemini stream created for a session uses that session's selected key. The speaker page remembers the selection so recovery after a Render restart preserves it. Glotta streams audio and captions in memory and does not persist them to a database or file. The option is fixed for the life of an active session; reconnecting the weekly code with the other option shows an error instead of silently switching keys.
 
 ## Repository layout
 
@@ -39,7 +51,7 @@ The server keeps the Gemini API key private, manages live sessions, fans speaker
 ## Prerequisites
 
 - Node.js 20.19.4 or newer.
-- A Gemini API key with access to Gemini Live Translate.
+- Two Gemini API keys with access to Gemini Live Translate: one free-tier key and one paid-tier key.
 - A public HTTPS deployment for real services, or a shared local network for testing.
 
 ## Run the relay server locally
@@ -54,7 +66,8 @@ npm install
 Create a `.env` file in `server/`:
 
 ```env
-GEMINI_API_KEY=your-gemini-key
+GEMINI_API_KEY_FREE=your-free-gemini-key
+GEMINI_API_KEY_PAID=your-paid-gemini-key
 PASSWORD=choose-a-speaker-password
 ```
 
@@ -94,7 +107,8 @@ eas build --platform ios --profile preview
 Deploy `server/` to a Node host such as Render, Railway, Fly.io, or a VPS. Configure:
 
 ```env
-GEMINI_API_KEY=your-gemini-key
+GEMINI_API_KEY_FREE=your-free-gemini-key
+GEMINI_API_KEY_PAID=your-paid-gemini-key
 PASSWORD=choose-a-speaker-password
 PUBLIC_BASE_URL=https://your-public-url.example.com
 ```

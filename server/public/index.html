@@ -44,6 +44,16 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         <span id="weeklyLabel">Weekly session</span>
       </button>
+      <fieldset class="tier-picker">
+        <legend>Gemini option</legend>
+        <div class="tier-toggle">
+          <input type="radio" name="apiTier" id="tierFree" value="free" checked>
+          <label for="tierFree">Free</label>
+          <input type="radio" name="apiTier" id="tierPaid" value="paid">
+          <label for="tierPaid">Paid</label>
+        </div>
+        <p class="tier-note" id="tierNote" aria-live="polite"></p>
+      </fieldset>
       <p class="hint" style="margin:16px auto 2px">You are the speaker. Listeners join by scanning a QR code on the next screen — no app to install.
         The weekly session always uses the same code, link and QR — safe to print and reuse every Sunday.</p>
     </div>
@@ -58,7 +68,24 @@ const startBtn = document.getElementById('start');
 const weeklyBtn = document.getElementById('weekly');
 const errEl = document.getElementById('err');
 const pwdEl = document.getElementById('pwd');
+const tierInputs = [...document.querySelectorAll('input[name="apiTier"]')];
+const tierNote = document.getElementById('tierNote');
 const PWD_KEY = 'glotta.pwd';
+const TIER_NOTES = {
+  free: 'Data transmitted will be used to improve Google products. Use this option only with content that is not confidential.',
+  paid: 'Please use this option with discretion because it charges the app administrator. It is appropriate for sensitive or confidential content, and the data is not stored.',
+};
+
+function selectedApiTier() {
+  return tierInputs.find((input) => input.checked)?.value === 'paid' ? 'paid' : 'free';
+}
+
+function updateTierNote() {
+  tierNote.textContent = TIER_NOTES[selectedApiTier()];
+}
+
+tierInputs.forEach((input) => input.addEventListener('change', updateTierNote));
+updateTierNote();
 
 // Remember the passcode on this device so the church only types it once.
 pwdEl.value = localStorage.getItem(PWD_KEY) || '';
@@ -78,31 +105,39 @@ fetch('/api/config')
 async function startSession(sessionId) {
   const title = document.getElementById('title').value.trim();
   const password = pwdEl.value;
+  const apiTier = selectedApiTier();
   startBtn.disabled = true;
   weeklyBtn.disabled = true;
+  tierInputs.forEach((input) => { input.disabled = true; });
   errEl.textContent = '';
   try {
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, password, sessionId }),
+      body: JSON.stringify({ title, password, sessionId, apiTier }),
     });
     if (res.status === 401) {
       errEl.textContent = 'Incorrect password.';
       localStorage.removeItem(PWD_KEY);
       startBtn.disabled = false;
       weeklyBtn.disabled = !weeklySessionId;
+      tierInputs.forEach((input) => { input.disabled = false; });
       return;
     }
-    if (!res.ok) throw new Error('Server error ' + res.status);
+    if (!res.ok) {
+      const responseBody = await res.json().catch(() => ({}));
+      throw new Error(responseBody.error || 'Server error ' + res.status);
+    }
     const data = await res.json();
     localStorage.setItem(PWD_KEY, password); // worked — remember it
     localStorage.setItem('glotta.title.' + data.sessionId, data.title || title);
+    localStorage.setItem('glotta.apiTier.' + data.sessionId, data.apiTier || apiTier);
     location.href = '/speak/' + data.sessionId;
   } catch (e) {
-    errEl.textContent = 'Could not start a session. Please try again.';
+    errEl.textContent = e.message || 'Could not start a session. Please try again.';
     startBtn.disabled = false;
     weeklyBtn.disabled = !weeklySessionId;
+    tierInputs.forEach((input) => { input.disabled = false; });
   }
 }
 

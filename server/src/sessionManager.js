@@ -36,6 +36,12 @@ const SESSION_AUDIO_IDLE_MINUTES = Number.isFinite(configuredAudioIdleMinutes)
   : MIN_AUDIO_IDLE_MINUTES;
 const SESSION_AUDIO_IDLE_MS = SESSION_AUDIO_IDLE_MINUTES * 60_000;
 
+// The paid key is selected only for the one exact value sent by the UI. Older
+// clients, omitted values, and unexpected values all stay on the free tier.
+export function normalizeApiTier(apiTier) {
+  return apiTier === 'paid' ? 'paid' : 'free';
+}
+
 /**
  * One language channel inside a session: a single Gemini translator shared by
  * every listener of that language.
@@ -47,7 +53,7 @@ class LanguageChannel {
     this.listeners = new Set(); // WebSocket[]
     this.lingerTimer = null;
     this.translator = new Translator({
-      apiKey: session.manager.apiKey,
+      apiKey: session.apiKey,
       targetLanguage: lang,
       echoTargetLanguage: session.echoTargetLanguage,
       onAudio: (data) => this.broadcast({ type: 'audio', data }),
@@ -102,11 +108,13 @@ class LanguageChannel {
 }
 
 class Session {
-  constructor(manager, { title, echoTargetLanguage, id }) {
+  constructor(manager, { title, echoTargetLanguage, id, apiTier }) {
     this.manager = manager;
     this.id = id || makeSessionId();
     this.title = title || 'Live translation';
     this.echoTargetLanguage = Boolean(echoTargetLanguage);
+    this.apiTier = normalizeApiTier(apiTier);
+    this.apiKey = manager.apiKeyForTier(this.apiTier);
     this.createdAt = Date.now();
     this.speakerWs = null;
     this.channels = new Map(); // lang -> LanguageChannel
@@ -147,7 +155,7 @@ class Session {
   ensureSpeakerTranscript() {
     if (this.speakerTranscriptTranslator) return;
     const translator = new Translator({
-      apiKey: this.manager.apiKey,
+      apiKey: this.apiKey,
       targetLanguage: SPEAKER_TRANSCRIPT_LANGUAGE,
       echoTargetLanguage: false,
       onAudio: () => {},
@@ -240,9 +248,20 @@ class Session {
 }
 
 export class SessionManager {
-  constructor(apiKey) {
-    this.apiKey = apiKey;
+  constructor(apiKeys) {
+    // Accepting the former string shape keeps SessionManager convenient for
+    // isolated tests and older internal callers; production passes both keys.
+    this.apiKeys = typeof apiKeys === 'string'
+      ? { free: apiKeys, paid: apiKeys }
+      : apiKeys;
     this.sessions = new Map(); // id -> Session
+  }
+
+  apiKeyForTier(apiTier) {
+    const normalizedTier = normalizeApiTier(apiTier);
+    const apiKey = this.apiKeys?.[normalizedTier];
+    if (!apiKey) throw new Error('Missing Gemini API key for ' + normalizedTier + ' tier');
+    return apiKey;
   }
 
   create(opts = {}) {

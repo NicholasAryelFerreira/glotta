@@ -6,19 +6,25 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
-import { isValidSessionId, SessionManager } from './sessionManager.js';
+import { isValidSessionId, normalizeApiTier, SessionManager } from './sessionManager.js';
 import { LANGUAGES, isSupportedLanguage } from './languages.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
-const API_KEY = process.env.GEMINI_API_KEY;
+const API_KEYS = {
+  free: process.env.GEMINI_API_KEY_FREE,
+  paid: process.env.GEMINI_API_KEY_PAID,
+};
 // Shared passcode required to *create* a session (i.e. to be the speaker), so
 // strangers who find the public URL can't spin up sessions on our Gemini key.
 // If unset, creation is open (e.g. for local development).
 const CREATE_PASSWORD = process.env.PASSWORD;
 
-if (!API_KEY) {
-  console.error('Missing GEMINI_API_KEY. Copy .env.example to .env and set your key.');
+const missingApiKeyTiers = Object.entries(API_KEYS)
+  .filter(([, apiKey]) => !apiKey)
+  .map(([tier]) => tier);
+if (missingApiKeyTiers.length > 0) {
+  console.error('Missing Gemini API key(s) for: ' + missingApiKeyTiers.join(', ') + '. Copy .env.example to .env and set both keys.');
   process.exit(1);
 }
 
@@ -41,7 +47,7 @@ if (!isValidSessionId(WEEKLY_SESSION_ID)) {
 // load, so this is mainly a cushion for longer outages.
 const SPEAKER_GRACE_MS = 5 * 60_000;
 
-const manager = new SessionManager(API_KEY);
+const manager = new SessionManager(API_KEYS);
 const app = express();
 // Render (and most cloud hosts) put us behind a TLS-terminating proxy, so trust
 // X-Forwarded-Proto/Host to build correct https:// join links and QR codes.
@@ -65,19 +71,27 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/sessions', (req, res) => {
-  const { title, echoTargetLanguage, password, sessionId } = req.body || {};
+  const { title, echoTargetLanguage, password, sessionId, apiTier } = req.body || {};
   if (CREATE_PASSWORD && password !== CREATE_PASSWORD) {
     return res.status(401).json({ error: 'Incorrect password' });
   }
   if (sessionId && !isValidSessionId(sessionId)) {
     return res.status(400).json({ error: 'Invalid session code' });
   }
+  const requestedApiTier = normalizeApiTier(apiTier);
+  const existingSession = sessionId ? manager.get(sessionId) : null;
+  if (existingSession && existingSession.apiTier !== requestedApiTier) {
+    return res.status(409).json({
+      error: 'This session is already using the ' + existingSession.apiTier + ' option. Select ' + existingSession.apiTier + ' to reconnect.',
+    });
+  }
   // sessionId is optional: the home page omits it (new code), while the speaker
   // page passes it to revive its session under the same code after a restart.
-  const session = manager.create({ title, echoTargetLanguage, id: sessionId });
+  const session = manager.create({ title, echoTargetLanguage, id: sessionId, apiTier: requestedApiTier });
   res.json({
     sessionId: session.id,
     title: session.title,
+    apiTier: session.apiTier,
     joinUrl: `${baseUrl(req)}/join/${session.id}`,
   });
 });
@@ -88,6 +102,7 @@ app.get('/api/sessions/:id', (req, res) => {
   res.json({
     sessionId: session.id,
     title: session.title,
+    apiTier: session.apiTier,
     speakerOnline: Boolean(session.speakerWs && session.speakerWs.readyState === session.speakerWs.OPEN),
     activeLanguages: [...session.channels.keys()],
   });
