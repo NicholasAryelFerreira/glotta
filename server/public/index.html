@@ -32,9 +32,7 @@
     </div>
 
     <div class="card">
-      <label class="field-label" for="title">Session name</label>
-      <input id="title" class="input" placeholder="Sunday Service" autocomplete="off">
-      <label class="field-label" for="pwd" style="margin-top:14px">Password</label>
+      <label class="field-label" for="pwd">Password</label>
       <input id="pwd" class="input" type="password" placeholder="Enter password" autocomplete="off">
       <div class="err password-error" id="err" role="alert" aria-live="polite"></div>
       <button id="start" class="btn btn-primary session-action-btn" style="margin-top:14px">
@@ -114,7 +112,6 @@ window.addEventListener('pageshow', () => {
 });
 
 async function startSession(sessionId) {
-  const title = document.getElementById('title').value.trim();
   const password = pwdEl.value;
   const apiTier = selectedApiTier();
   startBtn.disabled = true;
@@ -125,7 +122,7 @@ async function startSession(sessionId) {
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, password, sessionId, apiTier }),
+      body: JSON.stringify({ password, sessionId, apiTier }),
     });
     if (res.status === 401) {
       errEl.textContent = 'Incorrect password.';
@@ -141,7 +138,7 @@ async function startSession(sessionId) {
     }
     const data = await res.json();
     localStorage.setItem(PWD_KEY, password); // worked — remember it
-    localStorage.setItem('glotta.title.' + data.sessionId, data.title || title);
+    localStorage.setItem('glotta.title.' + data.sessionId, data.title);
     localStorage.setItem('glotta.apiTier.' + data.sessionId, data.apiTier || apiTier);
     location.href = '/speak/' + data.sessionId;
   } catch (e) {
@@ -155,7 +152,6 @@ async function startSession(sessionId) {
 startBtn.onclick = () => startSession(undefined);
 weeklyBtn.onclick = () => { if (weeklySessionId) startSession(weeklySessionId); };
 const submitOnEnter = (e) => { if (e.key === 'Enter') startBtn.click(); };
-document.getElementById('title').addEventListener('keydown', submitOnEnter);
 pwdEl.addEventListener('keydown', submitOnEnter);
 </script>
 </body>
