@@ -153,7 +153,6 @@ select.input option { color: #16122b; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .session-action-label { text-align: center; white-space: nowrap; }
-.praying-hands-icon { font-size: 20px; line-height: 1; }
 .btn-live { background: linear-gradient(135deg, #ff7a87, var(--live)); box-shadow: 0 12px 30px -12px rgba(255, 92, 108, 0.85); }
 .btn-ghost { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--card-brd); color: var(--muted); font-weight: 600; }
 
