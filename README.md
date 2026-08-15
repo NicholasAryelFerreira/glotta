@@ -1,6 +1,6 @@
 # Glotta
 
-Glotta is a real-time translation platform for lectures, trainings, sermons, and other live spoken events, powered by Google's `gemini-3.5-live-translate-preview` model. A speaker starts one live session, shares a QR code, and listeners join from their phone browser to hear translated audio with captions in 70+ languages.
+Glotta is a real-time translation platform for lectures, trainings, sermons, and other live spoken events, using speech-to-speech LLMs. A speaker starts one live session, shares a QR code, and listeners join from their phone browser to hear translated audio with captions in 70+ languages.
 
 <p align="center">
   <img src="docs/screenshots/home-session.png" alt="Glotta session setup screen" width="260">
