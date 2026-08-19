@@ -76,7 +76,7 @@
 
     <div class="card qr-card">
       <div class="qr-frame"><img id="qr" alt="QR code to join"></div>
-      <div class="wifi-note">Lakeview Wi-Fi Password: <strong>Mark16:15</strong></div>
+      <div class="wifi-note" id="wifiNote" hidden>Lakeview Public Wi-Fi Password: <strong>Mark16:15</strong></div>
       <div class="code-row">
         <span class="code-label">Join link</span>
         <span class="join-value" id="joinUrl"></span>
@@ -133,6 +133,7 @@ const toggleLabel = document.getElementById('toggleLabel');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const joinUrlEl = document.getElementById('joinUrl');
+const wifiNote = document.getElementById('wifiNote');
 const micSel = document.getElementById('mic');
 const micHint = document.getElementById('micHint');
 const audioMeter = document.getElementById('audioMeter');
@@ -149,6 +150,12 @@ const BUILTIN_MIC = /built.?in|internal|macbook|imac|realtek|microphone array|la
 
 const joinLink = `${location.origin}/join/${sessionId}`;
 joinUrlEl.textContent = joinLink.replace(/^https?:\/\//, '');
+
+// The Lakeview network details are only relevant to the fixed Sunday service.
+fetch('/api/config')
+  .then((r) => r.json())
+  .then((config) => { wifiNote.hidden = config.weeklySessionId !== sessionId.toUpperCase(); })
+  .catch(() => { wifiNote.hidden = true; });
 
 // Stays true while this page should hold a live connection to the session.
 // Set false only when the session is gone or the speaker ends it, so we never
