@@ -16,6 +16,7 @@
   .session-sub { color: var(--faint); font-size: 13px; text-align: center; margin: 0; letter-spacing: 0.3px; }
   .listen-card { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
   .listen-instr { font-size: 13px; color: var(--muted); text-align: center; margin: 0 0 2px; }
+  .service-times { font-size: 14px; font-weight: 700; color: var(--ink); text-align: center; margin: 0; }
   .listen-btn { font-size: 18px; padding: 18px; }
   .captions-card { width: 100%; }
   .captions-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
@@ -57,6 +58,7 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
         <span id="toggleLabel">Tap to listen</span>
       </button>
+      <p class="service-times" id="serviceTimes" hidden>Sunday services: 10:45 AM and 6:00 PM</p>
       <p class="listen-instr" id="wifiNote" hidden>Lakeview Public Wi-Fi Password: Mark16:15</p>
       <div class="pill" id="status" style="align-self:center; visibility:hidden"><span class="dot"></span><span>Idle</span></div>
     </div>
@@ -82,6 +84,7 @@ const toggleLabel = document.getElementById('toggleLabel');
 const statusEl = document.getElementById('status');
 const captionsEl = document.getElementById('captions');
 const errEl = document.getElementById('err');
+const serviceTimes = document.getElementById('serviceTimes');
 const wifiNote = document.getElementById('wifiNote');
 
 const LANG_KEY = 'glotta.lang';
@@ -90,8 +93,15 @@ const LANG_KEY = 'glotta.lang';
 // fixed code from public config instead of relying on the live session lookup.
 fetch('/api/config')
   .then((r) => r.json())
-  .then((config) => { wifiNote.hidden = config.weeklySessionId !== sessionId.toUpperCase(); })
-  .catch(() => { wifiNote.hidden = true; });
+  .then((config) => {
+    const isWeeklySession = config.weeklySessionId === sessionId.toUpperCase();
+    serviceTimes.hidden = !isWeeklySession;
+    wifiNote.hidden = !isWeeklySession;
+  })
+  .catch(() => {
+    serviceTimes.hidden = true;
+    wifiNote.hidden = true;
+  });
 
 function setStatus(kind, text) {
   if (kind === 'hidden') { statusEl.style.visibility = 'hidden'; return; }
