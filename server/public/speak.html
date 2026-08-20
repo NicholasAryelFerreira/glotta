@@ -20,8 +20,6 @@
     box-shadow: 0 14px 40px -18px rgba(0,0,0,.8);
   }
   .qr-frame img { width: 216px; height: 216px; display: block; border-radius: 6px; }
-  .wifi-note { color: var(--ink); font-size: 14px; font-weight: 700; text-align: center; line-height: 1.35; font-variant-ligatures: none; }
-  .wifi-note strong { color: #fff; letter-spacing: 0.2px; }
   .audio-meter { width: 100%; display: none; flex-direction: column; gap: 7px; margin-top: -4px; }
   .audio-meter.active { display: flex; }
   .audio-meter-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -78,7 +76,6 @@
     <div class="card qr-card">
       <p class="service-times" id="serviceTimes" hidden>Sunday services: 10:45 AM and 6:00 PM</p>
       <div class="qr-frame"><img id="qr" alt="QR code to join"></div>
-      <div class="wifi-note" id="wifiNote" hidden>Lakeview Public Wi-Fi Password: <strong>Mark16:15</strong></div>
       <div class="code-row">
         <span class="code-label">Join link</span>
         <span class="join-value" id="joinUrl"></span>
@@ -136,7 +133,6 @@ const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const joinUrlEl = document.getElementById('joinUrl');
 const serviceTimes = document.getElementById('serviceTimes');
-const wifiNote = document.getElementById('wifiNote');
 const micSel = document.getElementById('mic');
 const micHint = document.getElementById('micHint');
 const audioMeter = document.getElementById('audioMeter');
@@ -154,18 +150,14 @@ const BUILTIN_MIC = /built.?in|internal|macbook|imac|realtek|microphone array|la
 const joinLink = `${location.origin}/join/${sessionId}`;
 joinUrlEl.textContent = joinLink.replace(/^https?:\/\//, '');
 
-// Show service-specific details only for the fixed Sunday session.
+// Show the service schedule only for the fixed Sunday session.
 fetch('/api/config')
   .then((r) => r.json())
   .then((config) => {
     const isWeeklySession = config.weeklySessionId === sessionId.toUpperCase();
     serviceTimes.hidden = !isWeeklySession;
-    wifiNote.hidden = !isWeeklySession;
   })
-  .catch(() => {
-    serviceTimes.hidden = true;
-    wifiNote.hidden = true;
-  });
+  .catch(() => { serviceTimes.hidden = true; });
 
 // Stays true while this page should hold a live connection to the session.
 // Set false only when the session is gone or the speaker ends it, so we never

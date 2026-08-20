@@ -59,7 +59,6 @@
         <span id="toggleLabel">Tap to listen</span>
       </button>
       <p class="service-times" id="serviceTimes" hidden>Sunday services: 10:45 AM and 6:00 PM</p>
-      <p class="listen-instr" id="wifiNote" hidden>Lakeview Public Wi-Fi Password: Mark16:15</p>
       <div class="pill" id="status" style="align-self:center; visibility:hidden"><span class="dot"></span><span>Idle</span></div>
     </div>
 
@@ -85,7 +84,6 @@ const statusEl = document.getElementById('status');
 const captionsEl = document.getElementById('captions');
 const errEl = document.getElementById('err');
 const serviceTimes = document.getElementById('serviceTimes');
-const wifiNote = document.getElementById('wifiNote');
 
 const LANG_KEY = 'glotta.lang';
 
@@ -96,12 +94,8 @@ fetch('/api/config')
   .then((config) => {
     const isWeeklySession = config.weeklySessionId === sessionId.toUpperCase();
     serviceTimes.hidden = !isWeeklySession;
-    wifiNote.hidden = !isWeeklySession;
   })
-  .catch(() => {
-    serviceTimes.hidden = true;
-    wifiNote.hidden = true;
-  });
+  .catch(() => { serviceTimes.hidden = true; });
 
 function setStatus(kind, text) {
   if (kind === 'hidden') { statusEl.style.visibility = 'hidden'; return; }
