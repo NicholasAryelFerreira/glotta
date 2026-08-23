@@ -233,14 +233,12 @@ async function createAudioPlayer() {
   let node = null;
   try {
     await withTimeout(
-      Promise.all([publicConfigReady, ctx.resume()]),
+      (async () => {
+        await Promise.all([publicConfigReady, ctx.resume()]);
+        await ctx.audioWorklet.addModule('/listener-player.js');
+      })(),
       AUDIO_SETUP_TIMEOUT_MS,
-      'Audio start timed out',
-    );
-    await withTimeout(
-      ctx.audioWorklet.addModule('/listener-player.js'),
-      AUDIO_SETUP_TIMEOUT_MS,
-      'Audio player load timed out',
+      'Audio setup timed out',
     );
     if (setupSeq !== audioPlayerSeq) throw new Error('Audio setup was replaced');
     node = new AudioWorkletNode(ctx, 'pcm-stream-player', {
