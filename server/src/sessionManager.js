@@ -1,5 +1,11 @@
 import crypto from 'node:crypto';
 import { Translator } from './translator.js';
+import {
+  LIVE_EDGE_MAX_QUEUE_SECONDS,
+  audioBufferLimitBytes,
+  estimateQueuedAudioMs,
+  logAudioMetric,
+} from './liveEdge.js';
 
 // Unambiguous characters only (no 0/O, 1/I/L) — codes get read aloud in church.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -24,10 +30,20 @@ export function isValidSessionId(id) {
   return sanitizeId(id) !== null;
 }
 
+function finiteNonNegative(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
 // How long an empty language channel keeps its Gemini session alive, so a
 // listener refreshing their page doesn't tear down and recreate the session.
 const CHANNEL_LINGER_MS = 60_000;
-const LISTENER_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
+const LISTENER_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
+  24_000,
+  LIVE_EDGE_MAX_QUEUE_SECONDS,
+  512_000,
+);
+const AUDIO_METRIC_LOG_INTERVAL_MS = 10_000;
 const SPEAKER_TRANSCRIPT_LANGUAGE = 'en';
 const MIN_AUDIO_IDLE_MINUTES = 60;
 const configuredAudioIdleMinutes = Number(process.env.SESSION_AUDIO_IDLE_MINUTES);
@@ -51,6 +67,7 @@ class LanguageChannel {
     this.session = session;
     this.lang = lang;
     this.listeners = new Set(); // WebSocket[]
+    this.listenerAudioMetrics = new WeakMap();
     this.lingerTimer = null;
     this.translator = new Translator({
       apiKey: session.apiKey,
@@ -67,6 +84,8 @@ class LanguageChannel {
       },
       onError: (err) => this.broadcast({ type: 'error', message: err.message }),
       onStatus: (state) => this.broadcast({ type: 'status', state }),
+      sessionId: session.id,
+      streamKind: 'listener',
     });
   }
 
@@ -74,13 +93,38 @@ class LanguageChannel {
     const payload = JSON.stringify(obj);
     for (const ws of this.listeners) {
       if (ws.readyState !== ws.OPEN) continue;
-      if (obj.type === 'audio' && ws.bufferedAmount > LISTENER_AUDIO_BUFFER_LIMIT_BYTES) continue;
+      if (obj.type === 'audio' && ws.bufferedAmount > LISTENER_AUDIO_BUFFER_LIMIT_BYTES) {
+        this.#recordListenerDrop(ws);
+        continue;
+      }
       ws.send(payload);
     }
   }
 
+  #recordListenerDrop(ws) {
+    const now = Date.now();
+    const metrics = this.listenerAudioMetrics.get(ws) || { droppedChunks: 0, lastLogAt: 0 };
+    metrics.droppedChunks += 1;
+    if (now - metrics.lastLogAt >= AUDIO_METRIC_LOG_INTERVAL_MS) {
+      metrics.lastLogAt = now;
+      logAudioMetric({
+        event: 'audio-dropped',
+        sessionId: this.session.id,
+        stream: 'listener',
+        language: this.lang,
+        stage: 'listener-websocket',
+        queuedMs: estimateQueuedAudioMs(ws.bufferedAmount, 24_000),
+        bufferedBytes: ws.bufferedAmount,
+        droppedChunks: metrics.droppedChunks,
+        queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+      });
+    }
+    this.listenerAudioMetrics.set(ws, metrics);
+  }
+
   addListener(ws) {
     this.listeners.add(ws);
+    this.listenerAudioMetrics.set(ws, { droppedChunks: 0, lastLogAt: 0 });
     if (this.lingerTimer) {
       clearTimeout(this.lingerTimer);
       this.lingerTimer = null;
@@ -89,6 +133,7 @@ class LanguageChannel {
 
   removeListener(ws) {
     this.listeners.delete(ws);
+    this.listenerAudioMetrics.delete(ws);
     if (this.listeners.size === 0 && !this.lingerTimer) {
       this.lingerTimer = setTimeout(() => this.session.closeChannel(this.lang), CHANNEL_LINGER_MS);
     }
@@ -124,6 +169,14 @@ class Session {
     this.speakerTranscriptTranslator = null; // hidden Gemini stream for speaker transcript even with no listeners
     this.ended = false;
     this.lastAudioAt = Date.now();
+    this.speakerIngressMetrics = {
+      intervalStartedAt: Date.now(),
+      receivedChunks: 0,
+      sequenceGaps: 0,
+      lastSequence: null,
+      maxReportedCaptureAgeMs: 0,
+    };
+    this.listenerPlayerMetrics = new Map();
     this.audioIdleTimer = null;
     this.scheduleAudioIdleCheck();
   }
@@ -187,6 +240,8 @@ class Session {
         if (kind === 'input') this.sendToSpeaker({ type: 'transcript', kind: 'input', text });
       },
       onError: (err) => this.sendToSpeaker({ type: 'error', message: err.message }),
+      sessionId: this.id,
+      streamKind: 'speaker-transcript',
     });
     this.speakerTranscriptTranslator = translator;
     translator.connect().catch((err) => {
@@ -195,14 +250,103 @@ class Session {
   }
 
   /** Fan one base64 PCM chunk out to Gemini and every active language translator. */
-  pushAudio(base64Chunk) {
+  pushAudio(base64Chunk, metadata = {}) {
     if (this.ended) return;
     this.lastAudioAt = Date.now();
+    this.#recordSpeakerIngress(metadata);
     this.ensureSpeakerTranscript();
     this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
     for (const channel of this.channels.values()) {
       channel.translator.sendAudio(base64Chunk);
     }
+  }
+
+  #recordSpeakerIngress({ capturedAt, sequence } = {}) {
+    const now = Date.now();
+    const metrics = this.speakerIngressMetrics;
+    metrics.receivedChunks += 1;
+
+    if (Number.isSafeInteger(sequence)) {
+      if (metrics.lastSequence !== null && sequence > metrics.lastSequence + 1) {
+        metrics.sequenceGaps += sequence - metrics.lastSequence - 1;
+      }
+      metrics.lastSequence = sequence;
+    }
+
+    if (Number.isFinite(capturedAt)) {
+      const reportedAge = now - capturedAt;
+      // Ignore obviously skewed client clocks; this is diagnostic only.
+      if (reportedAge >= 0 && reportedAge <= 60_000) {
+        metrics.maxReportedCaptureAgeMs = Math.max(metrics.maxReportedCaptureAgeMs, reportedAge);
+      }
+    }
+
+    if (now - metrics.intervalStartedAt < AUDIO_METRIC_LOG_INTERVAL_MS) return;
+    logAudioMetric({
+      event: 'speaker-ingress',
+      sessionId: this.id,
+      intervalMs: now - metrics.intervalStartedAt,
+      receivedChunks: metrics.receivedChunks,
+      sequenceGaps: metrics.sequenceGaps,
+      maxReportedCaptureAgeMs: metrics.maxReportedCaptureAgeMs,
+      queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+    });
+    this.speakerIngressMetrics = {
+      intervalStartedAt: now,
+      receivedChunks: 0,
+      sequenceGaps: 0,
+      lastSequence: metrics.lastSequence,
+      maxReportedCaptureAgeMs: 0,
+    };
+  }
+
+  recordSpeakerClientMetrics(metrics = {}) {
+    logAudioMetric({
+      event: 'speaker-client',
+      sessionId: this.id,
+      intervalMs: finiteNonNegative(metrics.intervalMs),
+      capturedChunks: finiteNonNegative(metrics.capturedChunks),
+      sentChunks: finiteNonNegative(metrics.sentChunks),
+      droppedChunks: finiteNonNegative(metrics.droppedChunks),
+      peakBufferedBytes: finiteNonNegative(metrics.peakBufferedBytes),
+      currentBufferedBytes: finiteNonNegative(metrics.currentBufferedBytes),
+      queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+    });
+  }
+
+  recordListenerPlayerMetrics(lang, metrics = {}) {
+    const now = Date.now();
+    const aggregate = this.listenerPlayerMetrics.get(lang) || {
+      intervalStartedAt: 0,
+      queuedMs: 0,
+      droppedMs: 0,
+      maxBufferSeconds: 0,
+    };
+    aggregate.queuedMs = Math.max(aggregate.queuedMs, finiteNonNegative(metrics.queuedMs));
+    aggregate.droppedMs += finiteNonNegative(metrics.droppedMs);
+    aggregate.maxBufferSeconds = Math.max(
+      aggregate.maxBufferSeconds,
+      finiteNonNegative(metrics.maxBufferSeconds),
+    );
+    if (aggregate.intervalStartedAt !== 0 && now - aggregate.intervalStartedAt < AUDIO_METRIC_LOG_INTERVAL_MS) {
+      this.listenerPlayerMetrics.set(lang, aggregate);
+      return;
+    }
+    logAudioMetric({
+      event: 'listener-player',
+      sessionId: this.id,
+      language: lang,
+      queuedMs: aggregate.queuedMs,
+      droppedMs: aggregate.droppedMs,
+      maxBufferSeconds: aggregate.maxBufferSeconds,
+      queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+    });
+    this.listenerPlayerMetrics.set(lang, {
+      intervalStartedAt: now,
+      queuedMs: 0,
+      droppedMs: 0,
+      maxBufferSeconds: aggregate.maxBufferSeconds,
+    });
   }
 
   async addListener(ws, lang) {

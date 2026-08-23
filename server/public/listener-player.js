@@ -16,6 +16,7 @@ class PCMStreamPlayer extends AudioWorkletProcessor {
   constructor() {
     super();
     this.capacity = SOURCE_SAMPLE_RATE * BUFFER_CAPACITY_SECONDS;
+    this.maxBufferSamples = this.capacity;
     this.buffer = new Float32Array(this.capacity);
     this.readIndex = 0;
     this.writeIndex = 0;
@@ -31,6 +32,16 @@ class PCMStreamPlayer extends AudioWorkletProcessor {
       const message = event.data || {};
       if (message.type === 'clear') {
         this.clear(true);
+      } else if (message.type === 'configure') {
+        const requestedSeconds = Number(message.maxBufferSeconds);
+        if (Number.isFinite(requestedSeconds) && requestedSeconds > 0) {
+          this.maxBufferSamples = Math.max(
+            this.prebufferSamples,
+            Math.min(this.capacity, Math.round(SOURCE_SAMPLE_RATE * requestedSeconds)),
+          );
+          const overflow = this.available - this.maxBufferSamples;
+          if (overflow > 0) this.dropAndReport(overflow);
+        }
       } else if (message.type === 'audio' && message.samples) {
         this.push(message.samples);
       }
@@ -54,18 +65,38 @@ class PCMStreamPlayer extends AudioWorkletProcessor {
     this.readPhase = 0;
   }
 
+  dropAndReport(samples) {
+    const before = this.available;
+    this.drop(samples);
+    const dropped = before - this.available;
+    if (dropped <= 0) return;
+    this.port.postMessage?.({
+      type: 'audio-metrics',
+      queuedMs: Math.round((this.available / SOURCE_SAMPLE_RATE) * 1000),
+      droppedMs: Math.round((dropped / SOURCE_SAMPLE_RATE) * 1000),
+      maxBufferSeconds: this.maxBufferSamples / SOURCE_SAMPLE_RATE,
+    });
+  }
+
   push(rawSamples) {
     let samples = rawSamples instanceof Float32Array ? rawSamples : new Float32Array(rawSamples);
-    if (samples.length >= this.capacity) {
-      samples = samples.subarray(samples.length - this.capacity + 1);
+    if (samples.length >= this.maxBufferSamples) {
+      const droppedSamples = this.available + samples.length - this.maxBufferSamples + 1;
+      samples = samples.subarray(samples.length - this.maxBufferSamples + 1);
       this.clear(true);
+      this.port.postMessage?.({
+        type: 'audio-metrics',
+        queuedMs: 0,
+        droppedMs: Math.round((droppedSamples / SOURCE_SAMPLE_RATE) * 1000),
+        maxBufferSeconds: this.maxBufferSamples / SOURCE_SAMPLE_RATE,
+      });
     }
 
     // Stay near the live edge if a suspended/backgrounded page accumulated
     // more data than the ring can hold.
-    const overflow = this.available + samples.length - this.capacity;
+    const overflow = this.available + samples.length - this.maxBufferSamples;
     if (overflow > 0) {
-      this.drop(overflow);
+      this.dropAndReport(overflow);
       this.playing = false;
       this.fadeGain = 0;
     }

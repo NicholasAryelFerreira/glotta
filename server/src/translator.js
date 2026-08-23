@@ -1,4 +1,11 @@
 import WebSocket from 'ws';
+import {
+  LIVE_EDGE_MAX_QUEUE_SECONDS,
+  audioBufferLimitBytes,
+  estimateQueuedAudioMs,
+  logAudioMetric,
+  pendingAudioChunkLimit,
+} from './liveEdge.js';
 
 const MODEL = 'gemini-3.5-live-translate-preview';
 
@@ -9,8 +16,13 @@ const MODEL = 'gemini-3.5-live-translate-preview';
 // us send the translation config exactly as documented.
 const API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
 const WS_BASE = 'wss://generativelanguage.googleapis.com';
-const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = 512_000;
-const PENDING_AUDIO_CHUNK_LIMIT = 15; // about 1.5 seconds of 100 ms speaker chunks
+const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
+  16_000,
+  LIVE_EDGE_MAX_QUEUE_SECONDS,
+  512_000,
+);
+const PENDING_AUDIO_CHUNK_LIMIT = pendingAudioChunkLimit(LIVE_EDGE_MAX_QUEUE_SECONDS);
+const AUDIO_METRIC_LOG_INTERVAL_MS = 10_000;
 
 /**
  * Wraps one Gemini Live translation session for a single target language.
@@ -31,8 +43,20 @@ export class Translator {
    * @param {(kind: 'input'|'output', text: string) => void} opts.onTranscript
    * @param {(err: Error) => void} opts.onError
    * @param {(state: 'translator-online'|'translator-reconnecting') => void} [opts.onStatus]
+   * @param {string} [opts.sessionId]
+   * @param {string} [opts.streamKind]
    */
-  constructor({ apiKey, targetLanguage, echoTargetLanguage = false, onAudio, onTranscript, onError, onStatus }) {
+  constructor({
+    apiKey,
+    targetLanguage,
+    echoTargetLanguage = false,
+    onAudio,
+    onTranscript,
+    onError,
+    onStatus,
+    sessionId = 'unknown',
+    streamKind = 'listener',
+  }) {
     this.apiKey = apiKey;
     this.targetLanguage = targetLanguage;
     this.echoTargetLanguage = echoTargetLanguage;
@@ -40,6 +64,8 @@ export class Translator {
     this.onTranscript = onTranscript;
     this.onError = onError;
     this.onStatus = onStatus;
+    this.sessionId = sessionId;
+    this.streamKind = streamKind;
     this.ws = null;
     this.ready = false; // true once the server acknowledges setup
     this.closedByUs = false;
@@ -48,6 +74,12 @@ export class Translator {
     this.pendingAudio = [];
     this.resumptionHandle = null;
     this.connectionNumber = 0;
+    this.reconnectStartedAt = null;
+    this.firstInputAt = null;
+    this.firstOutputObserved = false;
+    this.droppedBufferedChunks = 0;
+    this.droppedPendingChunks = 0;
+    this.lastDropMetricAt = 0;
   }
 
   connect() {
@@ -73,6 +105,20 @@ export class Translator {
             `[gemini:${this.targetLanguage}] setup complete ` +
             `(connection ${this.connectionNumber}${this.resumptionHandle ? ', resumed' : ''})`,
           );
+          logAudioMetric({
+            event: 'gemini-setup',
+            sessionId: this.sessionId,
+            stream: this.streamKind,
+            language: this.targetLanguage,
+            connection: this.connectionNumber,
+            resumed: Boolean(this.resumptionHandle),
+            reconnectMs: this.reconnectStartedAt === null ? 0 : Date.now() - this.reconnectStartedAt,
+            pendingChunks: this.pendingAudio.length,
+            queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+          });
+          this.reconnectStartedAt = null;
+          this.firstInputAt = null;
+          this.firstOutputObserved = false;
           this.onStatus?.('translator-online');
           this.#flushPendingAudio();
           if (!settled) {
@@ -105,6 +151,7 @@ export class Translator {
           reject(new Error(`closed before setup (${code} ${reason})`));
         }
         if (!this.closedByUs) {
+          this.reconnectStartedAt = Date.now();
           this.onStatus?.('translator-reconnecting');
           this.#scheduleReconnect();
         }
@@ -176,7 +223,20 @@ export class Translator {
     const parts = turn?.parts ?? [];
     for (const part of parts) {
       const inline = part.inlineData || part.inline_data;
-      if (inline?.data) this.onAudio?.(inline.data);
+      if (inline?.data) {
+        if (!this.firstOutputObserved && this.firstInputAt !== null) {
+          this.firstOutputObserved = true;
+          logAudioMetric({
+            event: 'gemini-first-output',
+            sessionId: this.sessionId,
+            stream: this.streamKind,
+            language: this.targetLanguage,
+            connection: this.connectionNumber,
+            firstOutputMs: Date.now() - this.firstInputAt,
+          });
+        }
+        this.onAudio?.(inline.data);
+      }
     }
   }
 
@@ -200,7 +260,11 @@ export class Translator {
   #queueAudio(base64Chunk) {
     if (this.closedByUs) return;
     this.pendingAudio.push(base64Chunk);
-    if (this.pendingAudio.length > PENDING_AUDIO_CHUNK_LIMIT) this.pendingAudio.shift();
+    if (this.pendingAudio.length > PENDING_AUDIO_CHUNK_LIMIT) {
+      this.pendingAudio.shift();
+      this.droppedPendingChunks += 1;
+      this.#logDropMetric('gemini-pending', this.pendingAudio.length * 100);
+    }
   }
 
   #flushPendingAudio() {
@@ -216,8 +280,17 @@ export class Translator {
       this.#queueAudio(base64Chunk);
       return;
     }
-    if (this.ws.bufferedAmount > GEMINI_AUDIO_BUFFER_LIMIT_BYTES) return; // keep live audio live, not stale
+    if (this.ws.bufferedAmount > GEMINI_AUDIO_BUFFER_LIMIT_BYTES) {
+      this.droppedBufferedChunks += 1;
+      this.#logDropMetric(
+        'gemini-websocket',
+        estimateQueuedAudioMs(this.ws.bufferedAmount, 16_000),
+        this.ws.bufferedAmount,
+      );
+      return;
+    }
     try {
+      if (this.firstInputAt === null) this.firstInputAt = Date.now();
       this.ws.send(
         JSON.stringify({
           realtimeInput: { audio: { data: base64Chunk, mimeType: 'audio/pcm;rate=16000' } },
@@ -227,6 +300,24 @@ export class Translator {
       console.error(`[gemini:${this.targetLanguage}] send failed:`, err.message);
       this.#queueAudio(base64Chunk);
     }
+  }
+
+  #logDropMetric(stage, queuedMs, bufferedBytes = 0) {
+    const now = Date.now();
+    if (now - this.lastDropMetricAt < AUDIO_METRIC_LOG_INTERVAL_MS) return;
+    this.lastDropMetricAt = now;
+    logAudioMetric({
+      event: 'audio-dropped',
+      sessionId: this.sessionId,
+      stream: this.streamKind,
+      language: this.targetLanguage,
+      stage,
+      queuedMs,
+      bufferedBytes,
+      droppedBufferedChunks: this.droppedBufferedChunks,
+      droppedPendingChunks: this.droppedPendingChunks,
+      queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+    });
   }
 
   close() {

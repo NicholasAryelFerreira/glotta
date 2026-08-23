@@ -8,6 +8,10 @@ import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
 import { isValidSessionId, normalizeApiTier, SessionManager } from './sessionManager.js';
 import { LANGUAGES, isSupportedLanguage } from './languages.js';
+import {
+  LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS,
+  LIVE_EDGE_MAX_QUEUE_SECONDS,
+} from './liveEdge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -67,6 +71,10 @@ app.get('/api/config', (req, res) => {
   res.json({
     weeklySessionId: WEEKLY_SESSION_ID,
     weeklyJoinUrl: `${baseUrl(req)}/join/${WEEKLY_SESSION_ID}`,
+    liveEdgeMaxQueueSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+    listenerMaxBufferSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS > 0
+      ? LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS
+      : 4,
   });
 });
 
@@ -216,7 +224,12 @@ function handleSpeaker(ws, session) {
       }
     } else if (msg.type === 'audio' && typeof msg.data === 'string') {
       if (session.speakerWs !== ws && !claimSpeakerInput(ws, session)) return;
-      session.pushAudio(msg.data);
+      session.pushAudio(msg.data, {
+        capturedAt: msg.capturedAt,
+        sequence: msg.sequence,
+      });
+    } else if (msg.type === 'audio-stats' && session.speakerWs === ws) {
+      session.recordSpeakerClientMetrics(msg);
     } else if (msg.type === 'end') {
       session.end();
     }
@@ -249,6 +262,18 @@ async function handleListener(ws, session, lang) {
   console.log(`[session:${session.id}] listener joined (${lang})`);
   ws.send(JSON.stringify({ type: 'status', state: 'connected', lang, title: session.title }));
 
+  ws.on('message', (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+    if (msg.type === 'listener-audio-stats') {
+      session.recordListenerPlayerMetrics(lang, msg);
+    }
+  });
+
   ws.on('close', () => {
     session.removeListener(ws, lang);
     console.log(`[session:${session.id}] listener left (${lang})`);
@@ -266,6 +291,11 @@ server.listen(PORT, () => {
     .filter((n) => n && n.family === 'IPv4' && !n.internal)
     .map((n) => n.address);
   console.log(`Glotta server listening on port ${PORT}`);
+  console.log(
+    LIVE_EDGE_MAX_QUEUE_SECONDS > 0
+      ? `Live-edge policy enabled: ${LIVE_EDGE_MAX_QUEUE_SECONDS}s per network queue, ${LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS}s listener buffer`
+      : 'Live-edge policy disabled: observing legacy queue behavior',
+  );
   console.log(`  Local:   http://localhost:${PORT}`);
   for (const ip of lanIps) console.log(`  Network: http://${ip}:${PORT}`);
 });

@@ -69,6 +69,7 @@ Create a `.env` file in `server/`:
 GEMINI_API_KEY_FREE=your-free-gemini-key
 GEMINI_API_KEY_PAID=your-paid-gemini-key
 PASSWORD=choose-a-speaker-password
+LIVE_EDGE_MAX_QUEUE_SECONDS=0
 ```
 
 Start the server:
@@ -124,6 +125,8 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 - Listeners returning after a longer phone-app switch are asked to tap once to restart browser audio while captions remain connected.
 - Live transcript and captions are capped in the browser to prevent long sermons from overloading the page.
 - Gemini streams use session resumption and context compression across periodic connection replacements, with a short catch-up window for brief gaps.
+- Audio queue, reconnect, first-output, and dropped-audio metrics are emitted as structured `[audio-metrics]` logs.
+- `LIVE_EDGE_MAX_QUEUE_SECONDS` is an opt-in safety flag. Leave it at `0` for legacy behavior; set it to `1` for a one-second network-queue budget and a two-second listener buffer. Enabled values are capped at one second so Glotta's own buffering cannot exceed five seconds even if the setting is accidentally higher.
 - A session automatically ends after 60 minutes without incoming speaker audio.
 
 ## License

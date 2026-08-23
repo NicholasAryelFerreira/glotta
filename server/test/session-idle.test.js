@@ -78,3 +78,32 @@ test('sessions use the selected Gemini key and otherwise default to free', () =>
     unexpectedSession.end('test complete');
   }
 });
+
+test('audio telemetry logs counts without audio or transcript content', (context) => {
+  const lines = [];
+  context.mock.method(console, 'log', (...args) => { lines.push(args.join(' ')); });
+  const manager = new SessionManager('test-key');
+  const session = manager.create({ id: 'METRIC' });
+
+  session.recordSpeakerClientMetrics({
+    intervalMs: 10_000,
+    capturedChunks: 100,
+    sentChunks: 90,
+    droppedChunks: 10,
+    peakBufferedBytes: 45_000,
+    currentBufferedBytes: 1_000,
+  });
+  session.recordListenerPlayerMetrics('pt-BR', {
+    queuedMs: 1_900,
+    droppedMs: 800,
+    maxBufferSeconds: 2,
+  });
+
+  const metrics = lines.filter((line) => line.startsWith('[audio-metrics]'));
+  assert.equal(metrics.length, 2);
+  assert.match(metrics[0], /"event":"speaker-client"/);
+  assert.match(metrics[0], /"droppedChunks":10/);
+  assert.match(metrics[1], /"event":"listener-player"/);
+  assert.doesNotMatch(metrics.join('\n'), /data|transcript/i);
+  session.end('test complete');
+});

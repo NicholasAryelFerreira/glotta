@@ -45,3 +45,27 @@ test('continuous PCM player preserves waveform continuity across chunks', async 
   assert.ok(peak > 0.3, `expected audible output, got peak ${peak}`);
   assert.ok(maxJump < 0.05, `unexpected playback discontinuity ${maxJump}`);
 });
+
+test('configured listener buffer drops oldest audio beyond two seconds', async () => {
+  let Processor;
+  const postedMetrics = [];
+  globalThis.sampleRate = 48_000;
+  globalThis.AudioWorkletProcessor = class {
+    constructor() {
+      this.port = {
+        onmessage: null,
+        postMessage(message) { postedMetrics.push(message); },
+      };
+    }
+  };
+  globalThis.registerProcessor = (_name, constructor) => { Processor = constructor; };
+
+  await import(`../public/listener-player.js?buffer-test=${Date.now()}`);
+  const player = new Processor();
+  player.port.onmessage({ data: { type: 'configure', maxBufferSeconds: 2 } });
+  player.port.onmessage({ data: { type: 'audio', samples: new Float32Array(72_000) } });
+
+  assert.ok(player.available <= 48_000, `expected at most two seconds, got ${player.available / 24_000}s`);
+  assert.equal(postedMetrics.at(-1)?.type, 'audio-metrics');
+  assert.ok(postedMetrics.at(-1)?.droppedMs >= 1_000);
+});

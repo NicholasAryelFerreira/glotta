@@ -86,16 +86,24 @@ const errEl = document.getElementById('err');
 const serviceTimes = document.getElementById('serviceTimes');
 
 const LANG_KEY = 'glotta.lang';
+let listenerMaxBufferSeconds = 4;
 
 // The reusable Sunday link may be opened before its session exists, so use the
 // fixed code from public config instead of relying on the live session lookup.
-fetch('/api/config')
-  .then((r) => r.json())
-  .then((config) => {
-    const isWeeklySession = config.weeklySessionId === sessionId.toUpperCase();
-    serviceTimes.hidden = !isWeeklySession;
-  })
-  .catch(() => { serviceTimes.hidden = true; });
+const publicConfigReady = Promise.race([
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((config) => {
+      const isWeeklySession = config.weeklySessionId === sessionId.toUpperCase();
+      serviceTimes.hidden = !isWeeklySession;
+      const configuredMax = Number(config.listenerMaxBufferSeconds);
+      if (Number.isFinite(configuredMax) && configuredMax > 0) {
+        listenerMaxBufferSeconds = configuredMax;
+      }
+    })
+    .catch(() => { serviceTimes.hidden = true; }),
+  new Promise((resolve) => setTimeout(resolve, 3_000)),
+]);
 
 function setStatus(kind, text) {
   if (kind === 'hidden') { statusEl.style.visibility = 'hidden'; return; }
@@ -202,6 +210,7 @@ async function destroyAudioPlayer() {
 }
 
 async function createAudioPlayer() {
+  await publicConfigReady;
   const ctx = new AudioContext({ latencyHint: 'interactive' });
   audioCtx = ctx;
   await ctx.resume();
@@ -215,6 +224,12 @@ async function createAudioPlayer() {
     numberOfOutputs: 1,
     outputChannelCount: [1],
   });
+  node.port.onmessage = (event) => {
+    const metrics = event.data || {};
+    if (metrics.type !== 'audio-metrics' || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'listener-audio-stats', ...metrics }));
+  };
+  node.port.postMessage({ type: 'configure', maxBufferSeconds: listenerMaxBufferSeconds });
   node.connect(ctx.destination);
   playerNode = node;
   if (ctx.state !== 'running') throw new Error('Audio is still paused');
