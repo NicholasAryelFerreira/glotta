@@ -39,8 +39,6 @@
   .copied { color: var(--good) !important; }
   .source-card { width: 100%; padding: 16px 18px; }
   .mic-hint { font-size: 12px; color: var(--faint); margin: 8px 2px 0; line-height: 1.45; }
-  .stat-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
-  .stat-big { font-size: 17px; font-weight: 700; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
   .chip { font-size: 12px; font-weight: 600; color: var(--ink); background: rgba(139,123,240,.18);
     border: 1px solid rgba(139,123,240,.3); padding: 4px 10px; border-radius: 999px; }
@@ -104,9 +102,6 @@
 
     <div class="err" id="err" role="alert" aria-live="polite"></div>
 
-    <div class="stat-row">
-      <span class="stat-big" id="stats">No listeners yet</span>
-    </div>
     <div class="chips" id="chips"></div>
 
     <div class="card transcript-card">
@@ -124,7 +119,6 @@
 <script>
 const sessionId = location.pathname.split('/').pop();
 const errEl = document.getElementById('err');
-const statsEl = document.getElementById('stats');
 const chipsEl = document.getElementById('chips');
 const transcriptEl = document.getElementById('transcript');
 const toggleBtn = document.getElementById('toggle');
@@ -508,7 +502,6 @@ function connectWs() {
     if (socket !== ws || socketSeq !== speakerSocketSeq) return;
     const msg = JSON.parse(ev.data);
     if (msg.type === 'stats') {
-      statsEl.textContent = msg.total === 0 ? 'No listeners yet' : `${msg.total} listening`;
       chipsEl.innerHTML = '';
       for (const [l, n] of Object.entries(msg.listeners)) {
         const chip = document.createElement('span');
