@@ -27,9 +27,19 @@ test('audio context is created before setup awaits to preserve mobile user activ
   );
 });
 
-test('resume creates replacement audio before any awaited cleanup', () => {
+test('resume reuses an existing iPhone audio player before rebuilding it', () => {
   const resume = joinHtml.match(/async function resumeListening\(\) \{([\s\S]*?)\n\}/)?.[1];
   assert.ok(resume, 'expected resumeListening');
-  assert.match(resume, /replaceListenerSocket\(\);\s*try \{[\s\S]*?await createAudioPlayer\(\);/);
+  assert.match(resume, /replaceListenerSocket\(\);\s*try \{\s*await resumeAudioPlayer\(\);/);
   assert.doesNotMatch(resume, /try \{\s*await destroyAudioPlayer\(\);/);
+
+  const requireTap = joinHtml.match(/function requireResumeTap\(\) \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(requireTap, 'expected requireResumeTap');
+  assert.doesNotMatch(requireTap, /destroyAudioPlayer\(\)/);
+
+  const resumePlayer = joinHtml.match(/async function resumeAudioPlayer\(\) \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(resumePlayer, 'expected resumeAudioPlayer');
+  assert.match(resumePlayer, /const resumePromise = ctx\.resume\(\);\s*primeAudioOutput\(ctx\);/);
+  assert.match(resumePlayer, /await withTimeout\(resumePromise/);
+  assert.match(resumePlayer, /if \(!ctx \|\| !playerNode[\s\S]*?await createAudioPlayer\(\);/);
 });

@@ -225,6 +225,16 @@ async function destroyAudioPlayer() {
   }
 }
 
+function primeAudioOutput(ctx) {
+  // Starting a silent source inside the tap reactivates iPhone audio output
+  // after an interruption even when AudioContext.state already says running.
+  const source = ctx.createBufferSource();
+  source.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+  source.connect(ctx.destination);
+  source.onended = () => { try { source.disconnect(); } catch { /* already disconnected */ } };
+  source.start();
+}
+
 async function createAudioPlayer() {
   const setupSeq = ++audioPlayerSeq;
   // Create the context before the first await so mobile browsers retain the
@@ -232,9 +242,11 @@ async function createAudioPlayer() {
   const ctx = new AudioContext({ latencyHint: 'interactive' });
   let node = null;
   try {
+    const resumePromise = ctx.resume();
+    primeAudioOutput(ctx);
     await withTimeout(
       (async () => {
-        await Promise.all([publicConfigReady, ctx.resume()]);
+        await Promise.all([publicConfigReady, resumePromise]);
         await ctx.audioWorklet.addModule('/listener-player.js');
       })(),
       AUDIO_SETUP_TIMEOUT_MS,
@@ -277,8 +289,23 @@ function showResumePrompt() {
 function requireResumeTap() {
   if (!listening || audioNeedsTap) return;
   audioNeedsTap = true;
+  clearScheduledAudio();
   showResumePrompt();
-  destroyAudioPlayer();
+}
+
+async function resumeAudioPlayer() {
+  const ctx = audioCtx;
+  if (!ctx || !playerNode || ctx.state === 'closed') {
+    await createAudioPlayer();
+    return;
+  }
+  // Network and app switches commonly suspend an otherwise healthy iPhone
+  // audio graph. Resume it from this tap instead of loading its worklet again.
+  const resumePromise = ctx.resume();
+  primeAudioOutput(ctx);
+  await withTimeout(resumePromise, AUDIO_SETUP_TIMEOUT_MS, 'Audio resume timed out');
+  if (ctx !== audioCtx || ctx.state !== 'running') throw new Error('Audio is still paused');
+  clearScheduledAudio();
 }
 
 function replaceListenerSocket() {
@@ -370,13 +397,10 @@ async function resumeListening() {
   errEl.textContent = '';
   setStatus('connecting', 'Restarting audio…');
   // A network handoff can leave the prior socket looking OPEN even though its
-  // route is dead. Replace it immediately while the new audio path is built.
+  // route is dead. Replace it while the existing audio player is resumed.
   replaceListenerSocket();
   try {
-    // requireResumeTap already detached the old player synchronously. Create
-    // the replacement before yielding this click gesture; iOS may reject an
-    // AudioContext created after asynchronous cleanup.
-    await createAudioPlayer();
+    await resumeAudioPlayer();
     audioNeedsTap = false;
     toggleLabel.textContent = 'Stop listening';
     toggleBtn.classList.remove('btn-accent');
