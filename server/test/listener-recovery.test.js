@@ -26,3 +26,10 @@ test('audio context is created before setup awaits to preserve mobile user activ
     'AudioContext must be created before the first await',
   );
 });
+
+test('resume creates replacement audio before any awaited cleanup', () => {
+  const resume = joinHtml.match(/async function resumeListening\(\) \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(resume, 'expected resumeListening');
+  assert.match(resume, /replaceListenerSocket\(\);\s*try \{[\s\S]*?await createAudioPlayer\(\);/);
+  assert.doesNotMatch(resume, /try \{\s*await destroyAudioPlayer\(\);/);
+});

@@ -373,7 +373,9 @@ async function resumeListening() {
   // route is dead. Replace it immediately while the new audio path is built.
   replaceListenerSocket();
   try {
-    await destroyAudioPlayer();
+    // requireResumeTap already detached the old player synchronously. Create
+    // the replacement before yielding this click gesture; iOS may reject an
+    // AudioContext created after asynchronous cleanup.
     await createAudioPlayer();
     audioNeedsTap = false;
     toggleLabel.textContent = 'Stop listening';
