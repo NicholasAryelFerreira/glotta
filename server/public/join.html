@@ -164,7 +164,20 @@ langSel.onchange = () => { toggleBtn.disabled = !langSel.value || !sessionReady;
 let ws = null, audioCtx = null, playerNode = null, listening = false, captionsStarted = false;
 let audioNeedsTap = false, audioSetupPending = false, hiddenAt = 0;
 let listenerSocketSeq = 0;
+let audioPlayerSeq = 0;
 const MAX_LIVE_CAPTION_CHARS = 2000;
+const AUDIO_SETUP_TIMEOUT_MS = 5_000;
+const AUDIO_CLOSE_TIMEOUT_MS = 1_000;
+
+function withTimeout(promise, timeoutMs, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 function appendBoundedText(el, text, maxChars) {
   el.textContent += text;
@@ -198,6 +211,7 @@ function playChunk(samples) {
 }
 
 async function destroyAudioPlayer() {
+  audioPlayerSeq += 1;
   const ctx = audioCtx;
   const node = playerNode;
   audioCtx = null;
@@ -205,34 +219,54 @@ async function destroyAudioPlayer() {
   try { node?.port.postMessage({ type: 'clear' }); } catch { /* already gone */ }
   try { node?.disconnect(); } catch { /* already disconnected */ }
   if (ctx && ctx.state !== 'closed') {
-    try { await ctx.close(); } catch { /* already closed */ }
+    try {
+      await withTimeout(ctx.close(), AUDIO_CLOSE_TIMEOUT_MS, 'Audio close timed out');
+    } catch { /* already closed, or the browser did not finish closing it */ }
   }
 }
 
 async function createAudioPlayer() {
-  await publicConfigReady;
+  const setupSeq = ++audioPlayerSeq;
+  // Create the context before the first await so mobile browsers retain the
+  // user gesture that started or resumed playback.
   const ctx = new AudioContext({ latencyHint: 'interactive' });
-  audioCtx = ctx;
-  await ctx.resume();
-  await ctx.audioWorklet.addModule('/listener-player.js');
-  if (audioCtx !== ctx) {
-    try { await ctx.close(); } catch { /* already closed */ }
-    throw new Error('Audio setup was replaced');
+  let node = null;
+  try {
+    await withTimeout(
+      Promise.all([publicConfigReady, ctx.resume()]),
+      AUDIO_SETUP_TIMEOUT_MS,
+      'Audio start timed out',
+    );
+    await withTimeout(
+      ctx.audioWorklet.addModule('/listener-player.js'),
+      AUDIO_SETUP_TIMEOUT_MS,
+      'Audio player load timed out',
+    );
+    if (setupSeq !== audioPlayerSeq) throw new Error('Audio setup was replaced');
+    node = new AudioWorkletNode(ctx, 'pcm-stream-player', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    node.port.onmessage = (event) => {
+      const metrics = event.data || {};
+      if (metrics.type !== 'audio-metrics' || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'listener-audio-stats', ...metrics }));
+    };
+    node.port.postMessage({ type: 'configure', maxBufferSeconds: listenerMaxBufferSeconds });
+    node.connect(ctx.destination);
+    if (ctx.state !== 'running') throw new Error('Audio is still paused');
+    audioCtx = ctx;
+    playerNode = node;
+  } catch (error) {
+    try { node?.disconnect(); } catch { /* setup did not finish */ }
+    if (ctx.state !== 'closed') {
+      try {
+        await withTimeout(ctx.close(), AUDIO_CLOSE_TIMEOUT_MS, 'Audio cleanup timed out');
+      } catch { /* browser did not finish cleanup */ }
+    }
+    throw error;
   }
-  const node = new AudioWorkletNode(ctx, 'pcm-stream-player', {
-    numberOfInputs: 0,
-    numberOfOutputs: 1,
-    outputChannelCount: [1],
-  });
-  node.port.onmessage = (event) => {
-    const metrics = event.data || {};
-    if (metrics.type !== 'audio-metrics' || !ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'listener-audio-stats', ...metrics }));
-  };
-  node.port.postMessage({ type: 'configure', maxBufferSeconds: listenerMaxBufferSeconds });
-  node.connect(ctx.destination);
-  playerNode = node;
-  if (ctx.state !== 'running') throw new Error('Audio is still paused');
 }
 
 function showResumePrompt() {
@@ -247,6 +281,17 @@ function requireResumeTap() {
   audioNeedsTap = true;
   showResumePrompt();
   destroyAudioPlayer();
+}
+
+function replaceListenerSocket() {
+  const oldSocket = ws;
+  listenerSocketSeq += 1;
+  ws = null;
+  clearScheduledAudio();
+  try { oldSocket?.close(); } catch { /* already closed */ }
+  if (!listening) return;
+  if (!audioNeedsTap) setStatus('offline', 'Reconnecting...');
+  connect();
 }
 
 function connect() {
@@ -323,7 +368,12 @@ async function resumeListening() {
   if (!listening || !audioNeedsTap || audioSetupPending) return;
   audioSetupPending = true;
   toggleBtn.disabled = true;
+  toggleLabel.textContent = 'Restarting…';
   errEl.textContent = '';
+  setStatus('connecting', 'Restarting audio…');
+  // A network handoff can leave the prior socket looking OPEN even though its
+  // route is dead. Replace it immediately while the new audio path is built.
+  replaceListenerSocket();
   try {
     await destroyAudioPlayer();
     await createAudioPlayer();
@@ -331,12 +381,13 @@ async function resumeListening() {
     toggleLabel.textContent = 'Stop listening';
     toggleBtn.classList.remove('btn-accent');
     toggleBtn.classList.add('btn-live');
-    setStatus('listening', 'Listening');
+    if (ws?.readyState === WebSocket.OPEN) setStatus('listening', 'Listening');
+    else setStatus('offline', 'Reconnecting...');
   } catch {
     await destroyAudioPlayer();
     audioNeedsTap = true;
     showResumePrompt();
-    errEl.textContent = 'Audio is still paused. Tap the button again to retry.';
+    errEl.textContent = 'Audio restart did not finish. Tap the button again to retry.';
   } finally {
     audioSetupPending = false;
     toggleBtn.disabled = false;
@@ -383,6 +434,19 @@ document.addEventListener('visibilitychange', () => {
   } else {
     clearScheduledAudio();
   }
+});
+
+window.addEventListener('offline', () => {
+  if (!listening) return;
+  clearScheduledAudio();
+  if (!audioNeedsTap) setStatus('offline', 'Network changed — waiting for connection');
+});
+
+window.addEventListener('online', () => {
+  if (!listening) return;
+  // The old socket may not notice a Wi-Fi/cellular route change promptly.
+  replaceListenerSocket();
+  if (!audioCtx || audioCtx.state !== 'running') requireResumeTap();
 });
 
 init();
