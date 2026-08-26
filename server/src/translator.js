@@ -150,6 +150,7 @@ export class Translator {
     this.lastDropMetricAt = 0;
     this.turnNumber = 1;
     this.usageReportNumber = 0;
+    this.pendingUsageMetadata = null;
   }
 
   connect() {
@@ -198,9 +199,12 @@ export class Translator {
           }
           return;
         }
-        this.#handleUsageMetadata(msg);
+        this.#captureUsageMetadata(msg);
         this.#handleSessionManagement(msg);
-        if (this.#handleServerContent(msg)) this.turnNumber += 1;
+        if (this.#handleServerContent(msg)) {
+          this.#logPendingUsage(true, 'turn-complete');
+          this.turnNumber += 1;
+        }
       });
 
       ws.on('error', (e) => {
@@ -215,6 +219,7 @@ export class Translator {
 
       ws.on('close', (code, reasonBuf) => {
         const reason = reasonBuf?.toString?.() || '';
+        this.#logPendingUsage(false, 'connection-close');
         console.log(`[gemini:${this.targetLanguage}] closed (${code}${reason ? ' ' + reason : ''})`);
         this.ready = false;
         this.ws = null;
@@ -283,10 +288,14 @@ export class Translator {
     }
   }
 
-  #handleUsageMetadata(msg) {
+  #captureUsageMetadata(msg) {
     const usage = msg.usageMetadata || msg.usage_metadata;
     if (!usage) return;
-    const content = msg.serverContent || msg.server_content;
+    this.pendingUsageMetadata = normalizeUsageMetadata(usage);
+  }
+
+  #logPendingUsage(turnComplete, reason) {
+    if (!this.pendingUsageMetadata) return;
     this.usageReportNumber += 1;
     console.log(`[gemini-usage] ${JSON.stringify({
       ts: new Date().toISOString(),
@@ -298,9 +307,11 @@ export class Translator {
       connection: this.connectionNumber,
       turn: this.turnNumber,
       report: this.usageReportNumber,
-      turnComplete: Boolean(content?.turnComplete ?? content?.turn_complete),
-      ...normalizeUsageMetadata(usage),
+      turnComplete,
+      reason,
+      ...this.pendingUsageMetadata,
     })}`);
+    this.pendingUsageMetadata = null;
   }
 
   #handleServerContent(msg) {
