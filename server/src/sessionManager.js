@@ -574,9 +574,11 @@ export class SessionManager {
   }
 
   apiKeyForTier(apiTier) {
-    const normalizedTier = normalizeApiTier(apiTier);
-    const apiKey = this.apiKeys?.[normalizedTier];
-    if (!apiKey) throw new Error('Missing Gemini API key for ' + normalizedTier + ' tier');
+    // Temporary reliability override: preserve the speaker's Free/Paid UI
+    // selection on the session, but route both selections through the paid
+    // Gemini project while the Free-tier Live Translate stall is investigated.
+    const apiKey = this.apiKeys?.paid;
+    if (!apiKey) throw new Error('Missing Gemini API key for paid tier');
     return apiKey;
   }
 

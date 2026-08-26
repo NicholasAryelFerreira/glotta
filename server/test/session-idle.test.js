@@ -55,7 +55,7 @@ test('only one device can claim a session audio input at a time', () => {
 });
 
 
-test('sessions use the selected Gemini key and otherwise default to free', () => {
+test('sessions preserve the UI tier but temporarily route both choices to the paid Gemini key', () => {
   const manager = new SessionManager({
     free: 'free-test-key',
     paid: 'paid-test-key',
@@ -66,11 +66,11 @@ test('sessions use the selected Gemini key and otherwise default to free', () =>
 
   try {
     assert.equal(defaultSession.apiTier, 'free');
-    assert.equal(defaultSession.apiKey, 'free-test-key');
+    assert.equal(defaultSession.apiKey, 'paid-test-key');
     assert.equal(paidSession.apiTier, 'paid');
     assert.equal(paidSession.apiKey, 'paid-test-key');
     assert.equal(unexpectedSession.apiTier, 'free');
-    assert.equal(unexpectedSession.apiKey, 'free-test-key');
+    assert.equal(unexpectedSession.apiKey, 'paid-test-key');
     assert.equal(normalizeApiTier(undefined), 'free');
   } finally {
     defaultSession.end('test complete');
