@@ -16,3 +16,10 @@ test('speaker page inline script remains valid JavaScript', () => {
   assert.ok(inlineScript, 'expected an inline speaker script');
   assert.doesNotThrow(() => new vm.Script(inlineScript));
 });
+
+test('speaker page reports voiced audio and shows transcript recovery states', () => {
+  assert.match(speakHtml, /speechDetected: Boolean\(speechDetected\)/);
+  assert.match(speakHtml, /Transcript stalled — reconnecting…/);
+  assert.match(speakHtml, /Transcript reconnecting…/);
+  assert.match(speakHtml, /msg\.state === 'transcript-online'/);
+});

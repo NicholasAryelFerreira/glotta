@@ -305,7 +305,15 @@ function appendBoundedText(el, text, maxChars) {
 
 function setStatus(state) {
   statusDot.className = 'dot' + (state === 'live' ? ' live' : '');
-  statusText.textContent = state === 'live' ? 'Live — translating' : state === 'connecting' ? 'Connecting…' : 'Microphone paused';
+  statusText.textContent = state === 'live'
+    ? 'Live — translating'
+    : state === 'connecting'
+      ? 'Connecting…'
+      : state === 'transcript-stalled'
+        ? 'Transcript stalled — reconnecting…'
+        : state === 'transcript-reconnecting'
+          ? 'Transcript reconnecting…'
+          : 'Microphone paused';
 }
 
 let ws = null, audioCtx = null, workletNode = null, mediaStream = null;
@@ -345,7 +353,7 @@ function maybeReportAudioStats(force = false) {
   peakSpeakerBufferedBytes = currentBufferedBytes;
 }
 
-function sendSpeakerAudio(int16) {
+function sendSpeakerAudio(int16, speechDetected) {
   if (!running || !speakerClaimed || !ws || ws.readyState !== WebSocket.OPEN) return;
   const capturedAt = Date.now();
   const sequence = ++audioSequence;
@@ -364,6 +372,7 @@ function sendSpeakerAudio(int16) {
     data: int16ToBase64(int16),
     capturedAt,
     sequence,
+    speechDetected: Boolean(speechDetected),
   }));
   sentAudioChunks += 1;
   maybeReportAudioStats();
@@ -472,7 +481,7 @@ function setAudioMeterVisible(visible) {
 }
 
 function updateAudioMeter(int16) {
-  if (!running || !audioMeter.classList.contains('active')) return;
+  if (!running || !audioMeter.classList.contains('active')) return false;
   let sumSquares = 0;
   let peak = 0;
   let count = 0;
@@ -490,6 +499,7 @@ function updateAudioMeter(int16) {
   const visibleLevel = audioMeterLevel < 0.01 ? 0 : audioMeterLevel;
   audioMeterFill.style.transform = `scaleX(${visibleLevel})`;
   audioMeterText.textContent = visibleLevel > 0.08 ? 'Glotta is capturing audio' : 'Low/no signal';
+  return visibleLevel > 0.08;
 }
 
 function connectWs() {
@@ -512,6 +522,12 @@ function connectWs() {
     } else if (msg.type === 'transcript' && msg.kind === 'input') {
       if (!transcriptStarted) { transcriptEl.textContent = ''; transcriptEl.classList.remove('placeholder'); transcriptStarted = true; }
       appendBoundedText(transcriptEl, msg.text, MAX_LIVE_TRANSCRIPT_CHARS);
+    } else if (msg.type === 'status' && msg.state === 'transcript-stalled') {
+      if (running) setStatus('transcript-stalled');
+    } else if (msg.type === 'status' && msg.state === 'transcript-reconnecting') {
+      if (running) setStatus('transcript-reconnecting');
+    } else if (msg.type === 'status' && msg.state === 'transcript-online') {
+      if (running) setStatus('live');
     } else if (msg.type === 'speaker-claim' && msg.state === 'granted') {
       const claimExpected = Boolean(claimResolver) || running || startPending;
       finishSpeakerClaim(true);
@@ -596,8 +612,8 @@ async function start() {
   const source = audioCtx.createMediaStreamSource(mediaStream);
   workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
   workletNode.port.onmessage = (ev) => {
-    updateAudioMeter(ev.data);
-    sendSpeakerAudio(ev.data);
+    const speechDetected = updateAudioMeter(ev.data);
+    sendSpeakerAudio(ev.data, speechDetected);
   };
   source.connect(workletNode);
   running = true;

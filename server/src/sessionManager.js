@@ -6,6 +6,7 @@ import {
   estimateQueuedAudioMs,
   logAudioMetric,
 } from './liveEdge.js';
+import { TranscriptWatchdog } from './transcriptWatchdog.js';
 
 // Unambiguous characters only (no 0/O, 1/I/L) — codes get read aloud in church.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -86,6 +87,7 @@ class LanguageChannel {
       onStatus: (state) => this.broadcast({ type: 'status', state }),
       sessionId: session.id,
       streamKind: 'listener',
+      apiTier: session.apiTier,
     });
   }
 
@@ -111,6 +113,7 @@ class LanguageChannel {
         event: 'audio-dropped',
         sessionId: this.session.id,
         stream: 'listener',
+        apiTier: this.session.apiTier,
         language: this.lang,
         stage: 'listener-websocket',
         queuedMs: estimateQueuedAudioMs(ws.bufferedAmount, 24_000),
@@ -167,6 +170,8 @@ class Session {
     this.channels = new Map(); // lang -> LanguageChannel
     this.transcriptChannel = null; // listener channel that mirrors input transcripts to the speaker as a fallback
     this.speakerTranscriptTranslator = null; // hidden Gemini stream for speaker transcript even with no listeners
+    this.speakerTranscriptWatchdog = new TranscriptWatchdog();
+    this.speakerTranscriptRestarting = false;
     this.ended = false;
     this.lastAudioAt = Date.now();
     this.speakerIngressMetrics = {
@@ -213,6 +218,7 @@ class Session {
   releaseSpeaker(ws) {
     if (this.speakerWs !== ws) return false;
     this.speakerWs = null;
+    this.speakerTranscriptWatchdog.reset();
     return true;
   }
 
@@ -237,11 +243,24 @@ class Session {
       echoTargetLanguage: false,
       onAudio: () => {},
       onTranscript: (kind, text) => {
-        if (kind === 'input') this.sendToSpeaker({ type: 'transcript', kind: 'input', text });
+        if (kind === 'input') {
+          this.speakerTranscriptWatchdog.recordTranscript();
+          this.sendToSpeaker({ type: 'transcript', kind: 'input', text });
+        }
       },
       onError: (err) => this.sendToSpeaker({ type: 'error', message: err.message }),
+      onStatus: (state) => {
+        if (state === 'translator-reconnecting') {
+          this.sendToSpeaker({ type: 'status', state: 'transcript-reconnecting' });
+          return;
+        }
+        this.speakerTranscriptWatchdog.reset();
+        this.speakerTranscriptRestarting = false;
+        this.sendToSpeaker({ type: 'status', state: 'transcript-online' });
+      },
       sessionId: this.id,
       streamKind: 'speaker-transcript',
+      apiTier: this.apiTier,
     });
     this.speakerTranscriptTranslator = translator;
     translator.connect().catch((err) => {
@@ -256,9 +275,35 @@ class Session {
     this.#recordSpeakerIngress(metadata);
     this.ensureSpeakerTranscript();
     this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
+    const stall = this.speakerTranscriptWatchdog.recordAudio({
+      speechDetected: metadata.speechDetected === true,
+      streamReady: this.speakerTranscriptTranslator?.ready === true,
+    });
+    if (stall) this.#restartStalledSpeakerTranscript(stall);
     for (const channel of this.channels.values()) {
       channel.translator.sendAudio(base64Chunk);
     }
+  }
+
+  #restartStalledSpeakerTranscript(stall) {
+    if (this.ended || this.speakerTranscriptRestarting) return;
+    this.speakerTranscriptRestarting = true;
+    logAudioMetric({
+      event: 'transcript-stall',
+      sessionId: this.id,
+      stream: 'speaker-transcript',
+      apiTier: this.apiTier,
+      voicedAudioMs: stall.voicedAudioMs,
+      elapsedSinceTranscriptMs: stall.elapsedSinceTranscriptMs,
+      action: 'fresh-reconnect',
+    });
+    this.sendToSpeaker({ type: 'status', state: 'transcript-stalled' });
+    this.speakerTranscriptTranslator?.close();
+    this.speakerTranscriptTranslator = null;
+    // A fresh logical Gemini session avoids resuming a connection that is open
+    // but no longer emitting input transcription. Pending audio stays capped at
+    // the live edge by Translator while the replacement completes setup.
+    this.ensureSpeakerTranscript();
   }
 
   #recordSpeakerIngress({ capturedAt, sequence } = {}) {
@@ -285,6 +330,7 @@ class Session {
     logAudioMetric({
       event: 'speaker-ingress',
       sessionId: this.id,
+      apiTier: this.apiTier,
       intervalMs: now - metrics.intervalStartedAt,
       receivedChunks: metrics.receivedChunks,
       sequenceGaps: metrics.sequenceGaps,
@@ -304,6 +350,7 @@ class Session {
     logAudioMetric({
       event: 'speaker-client',
       sessionId: this.id,
+      apiTier: this.apiTier,
       intervalMs: finiteNonNegative(metrics.intervalMs),
       capturedChunks: finiteNonNegative(metrics.capturedChunks),
       sentChunks: finiteNonNegative(metrics.sentChunks),
@@ -335,6 +382,7 @@ class Session {
     logAudioMetric({
       event: 'listener-player',
       sessionId: this.id,
+      apiTier: this.apiTier,
       language: lang,
       queuedMs: aggregate.queuedMs,
       droppedMs: aggregate.droppedMs,
@@ -441,7 +489,10 @@ export class SessionManager {
     if (id && this.sessions.has(id)) return this.sessions.get(id);
     const session = new Session(this, { ...opts, id });
     this.sessions.set(session.id, session);
-    console.log(`[session:${session.id}] ${id ? 'revived' : 'created'} ("${session.title}")`);
+    console.log(
+      `[session:${session.id}] ${id ? 'revived' : 'created'} ` +
+      `("${session.title}", tier: ${session.apiTier})`,
+    );
     return session;
   }
 

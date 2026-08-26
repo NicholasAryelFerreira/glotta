@@ -116,6 +116,7 @@ test('audio telemetry logs counts without audio or transcript content', (context
   const metrics = lines.filter((line) => line.startsWith('[audio-metrics]'));
   assert.equal(metrics.length, 2);
   assert.match(metrics[0], /"event":"speaker-client"/);
+  assert.match(metrics[0], /"apiTier":"free"/);
   assert.match(metrics[0], /"droppedChunks":10/);
   assert.match(metrics[1], /"event":"listener-player"/);
   assert.doesNotMatch(metrics.join('\n'), /data|transcript/i);

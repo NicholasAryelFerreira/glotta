@@ -45,6 +45,7 @@ export class Translator {
    * @param {(state: 'translator-online'|'translator-reconnecting') => void} [opts.onStatus]
    * @param {string} [opts.sessionId]
    * @param {string} [opts.streamKind]
+   * @param {'free'|'paid'} [opts.apiTier]
    */
   constructor({
     apiKey,
@@ -56,6 +57,7 @@ export class Translator {
     onStatus,
     sessionId = 'unknown',
     streamKind = 'listener',
+    apiTier = 'free',
   }) {
     this.apiKey = apiKey;
     this.targetLanguage = targetLanguage;
@@ -66,6 +68,7 @@ export class Translator {
     this.onStatus = onStatus;
     this.sessionId = sessionId;
     this.streamKind = streamKind;
+    this.apiTier = apiTier;
     this.ws = null;
     this.ready = false; // true once the server acknowledges setup
     this.closedByUs = false;
@@ -109,6 +112,7 @@ export class Translator {
             event: 'gemini-setup',
             sessionId: this.sessionId,
             stream: this.streamKind,
+            apiTier: this.apiTier,
             language: this.targetLanguage,
             connection: this.connectionNumber,
             resumed: Boolean(this.resumptionHandle),
@@ -230,6 +234,7 @@ export class Translator {
             event: 'gemini-first-output',
             sessionId: this.sessionId,
             stream: this.streamKind,
+            apiTier: this.apiTier,
             language: this.targetLanguage,
             connection: this.connectionNumber,
             firstOutputMs: Date.now() - this.firstInputAt,
@@ -310,6 +315,7 @@ export class Translator {
       event: 'audio-dropped',
       sessionId: this.sessionId,
       stream: this.streamKind,
+      apiTier: this.apiTier,
       language: this.targetLanguage,
       stage,
       queuedMs,

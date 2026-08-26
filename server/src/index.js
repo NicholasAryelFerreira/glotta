@@ -227,6 +227,7 @@ function handleSpeaker(ws, session) {
       session.pushAudio(msg.data, {
         capturedAt: msg.capturedAt,
         sequence: msg.sequence,
+        speechDetected: msg.speechDetected,
       });
     } else if (msg.type === 'audio-stats' && session.speakerWs === ws) {
       session.recordSpeakerClientMetrics(msg);
