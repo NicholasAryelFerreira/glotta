@@ -392,6 +392,9 @@ class Session {
     });
     if (stall) this.#restartStalledSpeakerTranscript(stall);
     for (const channel of this.channels.values()) {
+      // Keep an empty channel available briefly for a listener refresh, but do
+      // not pay to feed Gemini while nobody can receive that language.
+      if (channel.listeners.size === 0) continue;
       channel.translator.sendAudio(base64Chunk);
       channel.recordSpeakerAudio(metadata);
     }

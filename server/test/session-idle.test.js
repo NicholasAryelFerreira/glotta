@@ -122,6 +122,40 @@ test('sessions echo same-language output by default and allow an explicit opt-ou
   }
 });
 
+test('empty lingering language channels stop receiving paid audio without stopping speaker transcription', () => {
+  const manager = new SessionManager('test-key');
+  const session = manager.create({ id: 'LINGER' });
+  let speakerAudioChunks = 0;
+  let languageAudioChunks = 0;
+  let languageHealthChecks = 0;
+
+  session.speakerTranscriptTranslator = {
+    ready: true,
+    sendAudio() { speakerAudioChunks += 1; },
+    close() {},
+  };
+  const channel = {
+    listeners: new Set(),
+    translator: { sendAudio() { languageAudioChunks += 1; } },
+    recordSpeakerAudio() { languageHealthChecks += 1; },
+    close() {},
+  };
+  session.channels.set('es', channel);
+
+  session.pushAudio('first-chunk', { speechDetected: false });
+  assert.equal(speakerAudioChunks, 1);
+  assert.equal(languageAudioChunks, 0);
+  assert.equal(languageHealthChecks, 0);
+
+  channel.listeners.add(fakeSpeakerSocket());
+  session.pushAudio('second-chunk', { speechDetected: false });
+  assert.equal(speakerAudioChunks, 2);
+  assert.equal(languageAudioChunks, 1);
+  assert.equal(languageHealthChecks, 1);
+
+  session.end('test complete');
+});
+
 test('audio telemetry logs counts without audio or transcript content', (context) => {
   const lines = [];
   context.mock.method(console, 'log', (...args) => { lines.push(args.join(' ')); });
