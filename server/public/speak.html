@@ -552,10 +552,16 @@ function connectWs() {
       }
     }
   };
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     if (socket !== ws || socketSeq !== speakerSocketSeq) return;
     ws = null;
     speakerClaimed = false;
+    if (event.reason === 'maximum duration reached') {
+      if (running) stop(false);
+      sessionEnded();
+      errEl.textContent = 'This session reached the 2-hour limit — start a new session from the home page.';
+      return;
+    }
     if (!pageActive) return;
     if (running) { errEl.textContent = 'Connection lost - reconnecting...'; setStatus('connecting'); }
     setTimeout(() => { if (pageActive && !ws) connectWs(); }, 1500);

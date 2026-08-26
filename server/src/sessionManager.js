@@ -52,6 +52,8 @@ const SESSION_AUDIO_IDLE_MINUTES = Number.isFinite(configuredAudioIdleMinutes)
   ? Math.max(MIN_AUDIO_IDLE_MINUTES, configuredAudioIdleMinutes)
   : MIN_AUDIO_IDLE_MINUTES;
 const SESSION_AUDIO_IDLE_MS = SESSION_AUDIO_IDLE_MINUTES * 60_000;
+export const SESSION_MAX_DURATION_MINUTES = 120;
+const SESSION_MAX_DURATION_MS = SESSION_MAX_DURATION_MINUTES * 60_000;
 
 // The paid key is selected only for the one exact value sent by the UI. Older
 // clients, omitted values, and unexpected values all stay on the free tier.
@@ -114,6 +116,7 @@ class LanguageChannel {
       sessionId: this.session.id,
       streamKind: 'listener',
       apiTier: this.session.apiTier,
+      billingApiTier: this.session.billingApiTier,
     });
   }
 
@@ -259,6 +262,7 @@ class Session {
     this.title = title || 'Live translation';
     this.echoTargetLanguage = Boolean(echoTargetLanguage);
     this.apiTier = normalizeApiTier(apiTier);
+    this.billingApiTier = manager.billingApiTierForTier(this.apiTier);
     this.apiKey = manager.apiKeyForTier(this.apiTier);
     this.createdAt = Date.now();
     this.speakerSockets = new Set();
@@ -280,6 +284,12 @@ class Session {
     };
     this.listenerPlayerMetrics = new Map();
     this.audioIdleTimer = null;
+    this.maxDurationTimer = setTimeout(() => {
+      this.end(
+        `maximum duration of ${SESSION_MAX_DURATION_MINUTES} minutes reached`,
+        'maximum duration reached',
+      );
+    }, SESSION_MAX_DURATION_MS);
     this.scheduleAudioIdleCheck();
   }
 
@@ -358,6 +368,10 @@ class Session {
       sessionId: this.id,
       streamKind: 'speaker-transcript',
       apiTier: this.apiTier,
+      billingApiTier: this.billingApiTier,
+      // This stream only powers "What the model hears". Its translated output
+      // transcript was ignored, so disabling it cannot change the speaker UI.
+      outputAudioTranscription: false,
     });
     this.speakerTranscriptTranslator = translator;
     translator.connect().catch((err) => {
@@ -543,18 +557,20 @@ class Session {
     this.sendToSpeakers({ type: 'stats', total, listeners });
   }
 
-  end(reason = 'ended by speaker') {
+  end(reason = 'ended by speaker', speakerCloseReason = 'session ended') {
     if (this.ended) return;
     this.ended = true;
     if (this.audioIdleTimer) clearTimeout(this.audioIdleTimer);
     this.audioIdleTimer = null;
+    if (this.maxDurationTimer) clearTimeout(this.maxDurationTimer);
+    this.maxDurationTimer = null;
     if (this.speakerGraceTimer) clearTimeout(this.speakerGraceTimer);
     this.speakerGraceTimer = null;
     this.speakerTranscriptTranslator?.close();
     this.speakerTranscriptTranslator = null;
     for (const lang of [...this.channels.keys()]) this.closeChannel(lang);
     for (const ws of this.speakerSockets) {
-      if (ws.readyState === ws.OPEN) ws.close(1000, 'session ended');
+      if (ws.readyState === ws.OPEN) ws.close(1000, speakerCloseReason);
     }
     this.speakerSockets.clear();
     this.speakerWs = null;
@@ -580,6 +596,10 @@ export class SessionManager {
     const apiKey = this.apiKeys?.paid;
     if (!apiKey) throw new Error('Missing Gemini API key for paid tier');
     return apiKey;
+  }
+
+  billingApiTierForTier(_apiTier) {
+    return 'paid';
   }
 
   create(opts = {}) {

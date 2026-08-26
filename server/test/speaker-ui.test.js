@@ -23,3 +23,11 @@ test('speaker page reports voiced audio and shows transcript recovery states', (
   assert.match(speakHtml, /Transcript reconnecting…/);
   assert.match(speakHtml, /msg\.state === 'transcript-online'/);
 });
+
+test('speaker page stops instead of reviving a session after the two-hour limit', () => {
+  assert.match(
+    speakHtml,
+    /event\.reason === 'maximum duration reached'[\s\S]*?stop\(false\)[\s\S]*?sessionEnded\(\)/,
+  );
+  assert.match(speakHtml, /This session reached the 2-hour limit/);
+});

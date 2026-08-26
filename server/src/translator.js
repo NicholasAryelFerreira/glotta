@@ -24,6 +24,62 @@ const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
 const PENDING_AUDIO_CHUNK_LIMIT = pendingAudioChunkLimit(LIVE_EDGE_MAX_QUEUE_SECONDS);
 const AUDIO_METRIC_LOG_INTERVAL_MS = 10_000;
 
+function tokenCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function modalityDetails(details) {
+  if (!Array.isArray(details)) return [];
+  return details
+    .map((detail) => ({
+      modality: detail?.modality ?? null,
+      tokenCount: tokenCount(detail?.tokenCount ?? detail?.token_count),
+    }))
+    .filter((detail) => detail.modality !== null || detail.tokenCount !== null);
+}
+
+/** Normalize both raw-WebSocket and SDK naming without logging content. */
+export function normalizeUsageMetadata(usage = {}) {
+  return {
+    promptTokenCount: tokenCount(usage.promptTokenCount ?? usage.prompt_token_count),
+    responseTokenCount: tokenCount(
+      usage.responseTokenCount
+      ?? usage.response_token_count
+      ?? usage.candidatesTokenCount
+      ?? usage.candidates_token_count,
+    ),
+    thoughtsTokenCount: tokenCount(usage.thoughtsTokenCount ?? usage.thoughts_token_count),
+    cachedContentTokenCount: tokenCount(
+      usage.cachedContentTokenCount ?? usage.cached_content_token_count,
+    ),
+    toolUsePromptTokenCount: tokenCount(
+      usage.toolUsePromptTokenCount ?? usage.tool_use_prompt_token_count,
+    ),
+    totalTokenCount: tokenCount(usage.totalTokenCount ?? usage.total_token_count),
+    promptTokensDetails: modalityDetails(
+      usage.promptTokensDetails ?? usage.prompt_tokens_details,
+    ),
+    responseTokensDetails: modalityDetails(
+      usage.responseTokensDetails
+      ?? usage.response_tokens_details
+      ?? usage.candidatesTokensDetails
+      ?? usage.candidates_tokens_details,
+    ),
+    serviceTier: usage.serviceTier ?? usage.service_tier ?? null,
+  };
+}
+
+export function transcriptionSetupFields({
+  inputAudioTranscription = true,
+  outputAudioTranscription = true,
+} = {}) {
+  return {
+    ...(inputAudioTranscription ? { inputAudioTranscription: {} } : {}),
+    ...(outputAudioTranscription ? { outputAudioTranscription: {} } : {}),
+  };
+}
+
 /**
  * Wraps one Gemini Live translation session for a single target language.
  * Audio in: base64 raw PCM 16-bit / 16 kHz / mono.
@@ -46,6 +102,9 @@ export class Translator {
    * @param {string} [opts.sessionId]
    * @param {string} [opts.streamKind]
    * @param {'free'|'paid'} [opts.apiTier]
+   * @param {'free'|'paid'} [opts.billingApiTier]
+   * @param {boolean} [opts.inputAudioTranscription]
+   * @param {boolean} [opts.outputAudioTranscription]
    */
   constructor({
     apiKey,
@@ -58,6 +117,9 @@ export class Translator {
     sessionId = 'unknown',
     streamKind = 'listener',
     apiTier = 'free',
+    billingApiTier = apiTier,
+    inputAudioTranscription = true,
+    outputAudioTranscription = true,
   }) {
     this.apiKey = apiKey;
     this.targetLanguage = targetLanguage;
@@ -69,6 +131,9 @@ export class Translator {
     this.sessionId = sessionId;
     this.streamKind = streamKind;
     this.apiTier = apiTier;
+    this.billingApiTier = billingApiTier;
+    this.inputAudioTranscription = inputAudioTranscription;
+    this.outputAudioTranscription = outputAudioTranscription;
     this.ws = null;
     this.ready = false; // true once the server acknowledges setup
     this.closedByUs = false;
@@ -83,6 +148,8 @@ export class Translator {
     this.droppedBufferedChunks = 0;
     this.droppedPendingChunks = 0;
     this.lastDropMetricAt = 0;
+    this.turnNumber = 1;
+    this.usageReportNumber = 0;
   }
 
   connect() {
@@ -131,8 +198,9 @@ export class Translator {
           }
           return;
         }
+        this.#handleUsageMetadata(msg);
         this.#handleSessionManagement(msg);
-        this.#handleServerContent(msg);
+        if (this.#handleServerContent(msg)) this.turnNumber += 1;
       });
 
       ws.on('error', (e) => {
@@ -180,8 +248,10 @@ export class Translator {
             echoTargetLanguage: this.echoTargetLanguage,
           },
         },
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
+        ...transcriptionSetupFields({
+          inputAudioTranscription: this.inputAudioTranscription,
+          outputAudioTranscription: this.outputAudioTranscription,
+        }),
         // Gemini periodically replaces Live API WebSocket connections. Keep
         // the same logical session across those replacements so context and
         // voice continuity have the best chance of surviving the handoff.
@@ -213,9 +283,29 @@ export class Translator {
     }
   }
 
+  #handleUsageMetadata(msg) {
+    const usage = msg.usageMetadata || msg.usage_metadata;
+    if (!usage) return;
+    const content = msg.serverContent || msg.server_content;
+    this.usageReportNumber += 1;
+    console.log(`[gemini-usage] ${JSON.stringify({
+      ts: new Date().toISOString(),
+      sessionId: this.sessionId,
+      stream: this.streamKind,
+      selectedApiTier: this.apiTier,
+      billingApiTier: this.billingApiTier,
+      language: this.targetLanguage,
+      connection: this.connectionNumber,
+      turn: this.turnNumber,
+      report: this.usageReportNumber,
+      turnComplete: Boolean(content?.turnComplete ?? content?.turn_complete),
+      ...normalizeUsageMetadata(usage),
+    })}`);
+  }
+
   #handleServerContent(msg) {
     const content = msg.serverContent || msg.server_content;
-    if (!content) return;
+    if (!content) return false;
 
     const inputT = content.inputTranscription || content.input_transcription;
     if (inputT?.text) this.onTranscript?.('input', inputT.text);
@@ -243,6 +333,7 @@ export class Translator {
         this.onAudio?.(inline.data);
       }
     }
+    return Boolean(content.turnComplete ?? content.turn_complete);
   }
 
   #scheduleReconnect() {

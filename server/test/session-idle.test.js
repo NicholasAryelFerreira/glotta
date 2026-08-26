@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeApiTier, SessionManager } from '../src/sessionManager.js';
+import {
+  normalizeApiTier,
+  SESSION_MAX_DURATION_MINUTES,
+  SessionManager,
+} from '../src/sessionManager.js';
 
 function fakeSpeakerSocket() {
   return {
@@ -9,8 +13,10 @@ function fakeSpeakerSocket() {
     sent: [],
     closed: false,
     send(payload) { this.sent.push(JSON.parse(payload)); },
-    close() {
+    close(code, reason) {
       this.closed = true;
+      this.closeCode = code;
+      this.closeReason = reason;
       this.readyState = 3;
     },
   };
@@ -27,6 +33,27 @@ test('session closes only after 60 minutes without speaker audio', (context) => 
   context.mock.timers.tick(60_000);
   assert.equal(manager.get(session.id), undefined);
 });
+
+test('session closes after the two-hour maximum even when audio activity stays recent', (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const manager = new SessionManager('test-key');
+  const session = manager.create({ id: 'MAX120', title: 'Maximum duration test' });
+  const speaker = fakeSpeakerSocket();
+  session.addSpeakerSocket(speaker);
+
+  context.mock.timers.tick(59 * 60_000);
+  session.lastAudioAt = Date.now();
+  context.mock.timers.tick(59 * 60_000);
+  session.lastAudioAt = Date.now();
+  assert.equal(manager.get(session.id), session);
+
+  context.mock.timers.tick(2 * 60_000);
+  assert.equal(SESSION_MAX_DURATION_MINUTES, 120);
+  assert.equal(manager.get(session.id), undefined);
+  assert.equal(speaker.closeCode, 1000);
+  assert.equal(speaker.closeReason, 'maximum duration reached');
+});
+
 test('only one device can claim a session audio input at a time', () => {
   const manager = new SessionManager('test-key');
   const session = manager.create({ id: 'LOCK01', title: 'Speaker lock test' });
@@ -66,8 +93,10 @@ test('sessions preserve the UI tier but temporarily route both choices to the pa
 
   try {
     assert.equal(defaultSession.apiTier, 'free');
+    assert.equal(defaultSession.billingApiTier, 'paid');
     assert.equal(defaultSession.apiKey, 'paid-test-key');
     assert.equal(paidSession.apiTier, 'paid');
+    assert.equal(paidSession.billingApiTier, 'paid');
     assert.equal(paidSession.apiKey, 'paid-test-key');
     assert.equal(unexpectedSession.apiTier, 'free');
     assert.equal(unexpectedSession.apiKey, 'paid-test-key');
