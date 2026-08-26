@@ -153,7 +153,7 @@ class LanguageChannel {
 }
 
 class Session {
-  constructor(manager, { title, echoTargetLanguage, id, apiTier }) {
+  constructor(manager, { title, echoTargetLanguage = true, id, apiTier }) {
     this.manager = manager;
     this.id = id || makeSessionId();
     this.title = title || 'Live translation';

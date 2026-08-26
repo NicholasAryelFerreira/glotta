@@ -79,6 +79,20 @@ test('sessions use the selected Gemini key and otherwise default to free', () =>
   }
 });
 
+test('sessions echo same-language output by default and allow an explicit opt-out', () => {
+  const manager = new SessionManager('test-key');
+  const defaultSession = manager.create({ id: 'ECHO01' });
+  const silentSession = manager.create({ id: 'ECHO02', echoTargetLanguage: false });
+
+  try {
+    assert.equal(defaultSession.echoTargetLanguage, true);
+    assert.equal(silentSession.echoTargetLanguage, false);
+  } finally {
+    defaultSession.end('test complete');
+    silentSession.end('test complete');
+  }
+});
+
 test('audio telemetry logs counts without audio or transcript content', (context) => {
   const lines = [];
   context.mock.method(console, 'log', (...args) => { lines.push(args.join(' ')); });
