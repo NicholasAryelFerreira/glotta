@@ -43,3 +43,9 @@ test('resume reuses an existing iPhone audio player before rebuilding it', () =>
   assert.match(resumePlayer, /await withTimeout\(resumePromise/);
   assert.match(resumePlayer, /if \(!ctx \|\| !playerNode[\s\S]*?await createAudioPlayer\(\);/);
 });
+
+test('listener distinguishes a paused speaker from reconnecting and translation recovery', () => {
+  assert.match(joinHtml, /msg\.state === 'speaker-paused'[\s\S]*?Speaker paused/);
+  assert.match(joinHtml, /msg\.state === 'speaker-offline'[\s\S]*?Speaker reconnecting\.\.\./);
+  assert.match(joinHtml, /msg\.state === 'translation-stalled'[\s\S]*?Translation stalled — reconnecting\.\.\./);
+});

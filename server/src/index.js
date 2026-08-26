@@ -220,7 +220,7 @@ function handleSpeaker(ws, session) {
     } else if (msg.type === 'stop-speaking') {
       if (session.releaseSpeaker(ws)) {
         console.log(`[session:${session.id}] speaker audio released`);
-        broadcastToAll(session, { type: 'status', state: 'speaker-offline' });
+        broadcastToAll(session, { type: 'status', state: 'speaker-paused' });
       }
     } else if (msg.type === 'audio' && typeof msg.data === 'string') {
       if (session.speakerWs !== ws && !claimSpeakerInput(ws, session)) return;
@@ -262,6 +262,12 @@ async function handleListener(ws, session, lang) {
   }
   console.log(`[session:${session.id}] listener joined (${lang})`);
   ws.send(JSON.stringify({ type: 'status', state: 'connected', lang, title: session.title }));
+  if (!session.speakerWs) {
+    ws.send(JSON.stringify({
+      type: 'status',
+      state: session.speakerGraceTimer ? 'speaker-offline' : 'speaker-paused',
+    }));
+  }
 
   ws.on('message', (raw) => {
     let msg;

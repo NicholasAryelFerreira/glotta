@@ -339,8 +339,13 @@ function connect() {
       if (!captionsStarted) { captionsEl.textContent = ''; captionsEl.classList.remove('placeholder'); captionsStarted = true; }
       appendBoundedText(captionsEl, msg.text, MAX_LIVE_CAPTION_CHARS);
     } else if (msg.type === 'status') {
+      if (msg.state === 'speaker-paused' && !audioNeedsTap) setStatus('offline', 'Speaker paused');
       if (msg.state === 'speaker-offline' && !audioNeedsTap) setStatus('offline', 'Speaker reconnecting...');
       if (msg.state === 'speaker-online' && !audioNeedsTap) setStatus('listening', 'Listening');
+      if (msg.state === 'translation-stalled') {
+        clearScheduledAudio();
+        if (!audioNeedsTap) setStatus('offline', 'Translation stalled — reconnecting...');
+      }
       if (msg.state === 'translator-reconnecting') {
         clearScheduledAudio();
         if (!audioNeedsTap) setStatus('offline', 'Translation reconnecting...');

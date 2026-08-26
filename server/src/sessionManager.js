@@ -6,7 +6,7 @@ import {
   estimateQueuedAudioMs,
   logAudioMetric,
 } from './liveEdge.js';
-import { TranscriptWatchdog } from './transcriptWatchdog.js';
+import { SPEAKER_AUDIO_CHUNK_MS, TranscriptWatchdog } from './transcriptWatchdog.js';
 
 // Unambiguous characters only (no 0/O, 1/I/L) — codes get read aloud in church.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -70,24 +70,113 @@ class LanguageChannel {
     this.listeners = new Set(); // WebSocket[]
     this.listenerAudioMetrics = new WeakMap();
     this.lingerTimer = null;
-    this.translator = new Translator({
-      apiKey: session.apiKey,
-      targetLanguage: lang,
-      echoTargetLanguage: session.echoTargetLanguage,
-      onAudio: (data) => this.broadcast({ type: 'audio', data }),
+    this.outputWatchdog = new TranscriptWatchdog();
+    this.translationRestarting = false;
+    this.outputHealth = this.#newOutputHealth();
+    this.translator = this.#createTranslator();
+  }
+
+  #createTranslator() {
+    return new Translator({
+      apiKey: this.session.apiKey,
+      targetLanguage: this.lang,
+      echoTargetLanguage: this.session.echoTargetLanguage,
+      onAudio: (data) => {
+        this.outputWatchdog.recordOutput();
+        this.outputHealth.audioChunks += 1;
+        this.outputHealth.lastAudioAt = Date.now();
+        this.broadcast({ type: 'audio', data });
+      },
       onTranscript: (kind, text) => {
+        if (kind === 'output') {
+          this.outputHealth.transcriptEvents += 1;
+          this.outputHealth.lastTranscriptAt = Date.now();
+        }
         this.broadcast({ type: 'transcript', kind, text });
         // Input transcript is language-independent. Use one listener channel
         // as a fallback until the dedicated speaker transcript stream is ready.
-        if (kind === 'input' && !session.speakerTranscriptTranslator?.ready && session.transcriptChannel === this) {
-          session.sendToSpeaker({ type: 'transcript', kind: 'input', text });
+        if (
+          kind === 'input'
+          && !this.session.speakerTranscriptTranslator?.ready
+          && this.session.transcriptChannel === this
+        ) {
+          this.session.sendToSpeaker({ type: 'transcript', kind: 'input', text });
         }
       },
       onError: (err) => this.broadcast({ type: 'error', message: err.message }),
-      onStatus: (state) => this.broadcast({ type: 'status', state }),
-      sessionId: session.id,
+      onStatus: (state) => {
+        if (state === 'translator-online') {
+          this.outputWatchdog.reset();
+          this.translationRestarting = false;
+        }
+        this.broadcast({ type: 'status', state });
+      },
+      sessionId: this.session.id,
       streamKind: 'listener',
-      apiTier: session.apiTier,
+      apiTier: this.session.apiTier,
+    });
+  }
+
+  #newOutputHealth(now = Date.now(), previous = {}) {
+    return {
+      intervalStartedAt: now,
+      voicedInputMs: 0,
+      audioChunks: 0,
+      transcriptEvents: 0,
+      lastAudioAt: previous.lastAudioAt ?? null,
+      lastTranscriptAt: previous.lastTranscriptAt ?? null,
+    };
+  }
+
+  recordSpeakerAudio({ speechDetected } = {}) {
+    if (this.listeners.size === 0) return;
+    const now = Date.now();
+    if (speechDetected === true) this.outputHealth.voicedInputMs += SPEAKER_AUDIO_CHUNK_MS;
+
+    const stall = this.outputWatchdog.recordAudio({
+      speechDetected: speechDetected === true,
+      streamReady: this.translator.ready === true,
+    });
+    if (stall) this.#restartStalledTranslation(stall);
+
+    if (now - this.outputHealth.intervalStartedAt < AUDIO_METRIC_LOG_INTERVAL_MS) return;
+    logAudioMetric({
+      event: 'listener-output-health',
+      sessionId: this.session.id,
+      stream: 'listener',
+      apiTier: this.session.apiTier,
+      language: this.lang,
+      intervalMs: now - this.outputHealth.intervalStartedAt,
+      listeners: this.listeners.size,
+      voicedInputMs: this.outputHealth.voicedInputMs,
+      outputAudioChunks: this.outputHealth.audioChunks,
+      outputTranscriptEvents: this.outputHealth.transcriptEvents,
+      lastAudioOutputAgeMs: this.outputHealth.lastAudioAt === null ? null : now - this.outputHealth.lastAudioAt,
+      lastTranscriptOutputAgeMs: this.outputHealth.lastTranscriptAt === null
+        ? null
+        : now - this.outputHealth.lastTranscriptAt,
+    });
+    this.outputHealth = this.#newOutputHealth(now, this.outputHealth);
+  }
+
+  #restartStalledTranslation(stall) {
+    if (this.translationRestarting || this.listeners.size === 0) return;
+    this.translationRestarting = true;
+    logAudioMetric({
+      event: 'translation-stall',
+      sessionId: this.session.id,
+      stream: 'listener',
+      apiTier: this.session.apiTier,
+      language: this.lang,
+      voicedAudioMs: stall.voicedAudioMs,
+      elapsedSinceOutputMs: stall.elapsedSinceOutputMs,
+      action: 'fresh-reconnect',
+    });
+    this.broadcast({ type: 'status', state: 'translation-stalled' });
+    this.translator.close();
+    this.translator = this.#createTranslator();
+    this.translator.connect().catch((err) => {
+      console.error(`[session:${this.session.id}] ${this.lang} translation recovery failed:`, err.message);
     });
   }
 
@@ -126,6 +215,10 @@ class LanguageChannel {
   }
 
   addListener(ws) {
+    if (this.listeners.size === 0) {
+      this.outputWatchdog.reset();
+      this.outputHealth = this.#newOutputHealth();
+    }
     this.listeners.add(ws);
     this.listenerAudioMetrics.set(ws, { droppedChunks: 0, lastLogAt: 0 });
     if (this.lingerTimer) {
@@ -137,6 +230,10 @@ class LanguageChannel {
   removeListener(ws) {
     this.listeners.delete(ws);
     this.listenerAudioMetrics.delete(ws);
+    if (this.listeners.size === 0) {
+      this.outputWatchdog.reset();
+      this.outputHealth = this.#newOutputHealth();
+    }
     if (this.listeners.size === 0 && !this.lingerTimer) {
       this.lingerTimer = setTimeout(() => this.session.closeChannel(this.lang), CHANNEL_LINGER_MS);
     }
@@ -282,6 +379,7 @@ class Session {
     if (stall) this.#restartStalledSpeakerTranscript(stall);
     for (const channel of this.channels.values()) {
       channel.translator.sendAudio(base64Chunk);
+      channel.recordSpeakerAudio(metadata);
     }
   }
 
@@ -294,7 +392,7 @@ class Session {
       stream: 'speaker-transcript',
       apiTier: this.apiTier,
       voicedAudioMs: stall.voicedAudioMs,
-      elapsedSinceTranscriptMs: stall.elapsedSinceTranscriptMs,
+      elapsedSinceTranscriptMs: stall.elapsedSinceOutputMs,
       action: 'fresh-reconnect',
     });
     this.sendToSpeaker({ type: 'status', state: 'transcript-stalled' });
