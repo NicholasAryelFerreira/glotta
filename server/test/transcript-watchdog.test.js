@@ -27,7 +27,7 @@ test('speaker transcript watchdog fires after 20 seconds of voiced audio', () =>
   now += 100;
   assert.deepEqual(
     watchdog.recordAudio({ speechDetected: true, streamReady: true }),
-    { voicedAudioMs: SPEAKER_TRANSCRIPT_STALL_MS, elapsedSinceOutputMs: SPEAKER_TRANSCRIPT_STALL_MS },
+    { voicedAudioMs: SPEAKER_TRANSCRIPT_STALL_MS, elapsedSinceTranscriptMs: SPEAKER_TRANSCRIPT_STALL_MS },
   );
 });
 
@@ -44,12 +44,12 @@ test('new transcript resets accumulated voiced audio', () => {
   assert.ok(watchdog.recordAudio({ speechDetected: true, streamReady: true }));
 });
 
-test('generic output resets accumulated voiced audio for listener streams', () => {
+test('translated caption resets accumulated voiced audio for listener streams', () => {
   const watchdog = new TranscriptWatchdog({ stallMs: 300, chunkMs: 100 });
 
   assert.equal(watchdog.recordAudio({ speechDetected: true, streamReady: true }), null);
   assert.equal(watchdog.recordAudio({ speechDetected: true, streamReady: true }), null);
-  watchdog.recordOutput();
+  watchdog.recordTranscript();
   assert.equal(watchdog.recordAudio({ speechDetected: true, streamReady: true }), null);
   assert.equal(watchdog.recordAudio({ speechDetected: true, streamReady: true }), null);
   assert.ok(watchdog.recordAudio({ speechDetected: true, streamReady: true }));

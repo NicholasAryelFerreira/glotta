@@ -13,6 +13,21 @@ test('listener streams recover at the live edge after voiced audio produces no o
   assert.match(sessionManager, /this\.translator\.close\(\);[\s\S]*?this\.translator = this\.#createTranslator\(\)/);
 });
 
+test('listener watchdog requires translated captions even when Gemini keeps sending audio', () => {
+  const audioHandler = sessionManager.match(/onAudio: \(data\) => \{[\s\S]*?\n      \},/)?.[0];
+  const transcriptHandler = sessionManager.match(/onTranscript: \(kind, text\) => \{[\s\S]*?\n      \},/)?.[0];
+
+  assert.ok(audioHandler, 'expected listener audio handler');
+  assert.ok(transcriptHandler, 'expected listener transcript handler');
+  assert.doesNotMatch(audioHandler, /outputWatchdog\.record/);
+  assert.doesNotMatch(sessionManager, /outputWatchdog\.recordOutput/);
+  assert.match(
+    transcriptHandler,
+    /kind === 'output'[\s\S]*?outputWatchdog\.recordTranscript\(\)/,
+  );
+  assert.match(sessionManager, /elapsedSinceTranscriptMs: stall\.elapsedSinceTranscriptMs/);
+});
+
 test('listener stream metrics identify continuing output health without transcript content', () => {
   assert.match(sessionManager, /event: 'listener-output-health'/);
   assert.match(sessionManager, /outputAudioChunks: this\.outputHealth\.audioChunks/);

@@ -85,13 +85,16 @@ class LanguageChannel {
       targetLanguage: this.lang,
       echoTargetLanguage: this.session.echoTargetLanguage,
       onAudio: (data) => {
-        this.outputWatchdog.recordOutput();
         this.outputHealth.audioChunks += 1;
         this.outputHealth.lastAudioAt = Date.now();
         this.broadcast({ type: 'audio', data });
       },
       onTranscript: (kind, text) => {
         if (kind === 'output') {
+          // Captions prove the translation is semantically advancing. Gemini
+          // can keep emitting silent PCM while a language stream is stuck, so
+          // audio packets alone must not reset the recovery watchdog.
+          this.outputWatchdog.recordTranscript();
           this.outputHealth.transcriptEvents += 1;
           this.outputHealth.lastTranscriptAt = Date.now();
         }
@@ -173,7 +176,7 @@ class LanguageChannel {
       apiTier: this.session.apiTier,
       language: this.lang,
       voicedAudioMs: stall.voicedAudioMs,
-      elapsedSinceOutputMs: stall.elapsedSinceOutputMs,
+      elapsedSinceTranscriptMs: stall.elapsedSinceTranscriptMs,
       action: 'fresh-reconnect',
     });
     this.broadcast({ type: 'status', state: 'translation-stalled' });
@@ -419,7 +422,7 @@ class Session {
       stream: 'speaker-transcript',
       apiTier: this.apiTier,
       voicedAudioMs: stall.voicedAudioMs,
-      elapsedSinceTranscriptMs: stall.elapsedSinceOutputMs,
+      elapsedSinceTranscriptMs: stall.elapsedSinceTranscriptMs,
       action: 'fresh-reconnect',
     });
     this.sendToSpeaker({ type: 'status', state: 'transcript-stalled' });

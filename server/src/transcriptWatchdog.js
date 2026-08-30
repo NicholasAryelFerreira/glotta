@@ -20,14 +20,10 @@ export class TranscriptWatchdog {
 
   reset() {
     this.voicedAudioMs = 0;
-    this.lastOutputAt = this.now();
+    this.lastTranscriptAt = this.now();
   }
 
   recordTranscript() {
-    this.recordOutput();
-  }
-
-  recordOutput() {
     this.reset();
   }
 
@@ -38,7 +34,7 @@ export class TranscriptWatchdog {
 
     const stalled = {
       voicedAudioMs: this.voicedAudioMs,
-      elapsedSinceOutputMs: Math.max(0, this.now() - this.lastOutputAt),
+      elapsedSinceTranscriptMs: Math.max(0, this.now() - this.lastTranscriptAt),
     };
     this.reset();
     return stalled;
