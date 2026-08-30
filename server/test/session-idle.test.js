@@ -185,3 +185,38 @@ test('audio telemetry logs counts without audio or transcript content', (context
   assert.doesNotMatch(metrics.join('\n'), /data|transcript/i);
   session.end('test complete');
 });
+
+test('speaker client health reports aggregate older ten-second clients into one-minute logs', (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1 });
+  const lines = [];
+  context.mock.method(console, 'log', (...args) => { lines.push(args.join(' ')); });
+  const manager = new SessionManager('test-key');
+  const session = manager.create({ id: 'AGGREG' });
+  lines.length = 0;
+
+  const report = () => session.recordSpeakerClientMetrics({
+    intervalMs: 10_000,
+    capturedChunks: 100,
+    sentChunks: 99,
+    droppedChunks: 1,
+    peakBufferedBytes: 5_000,
+    currentBufferedBytes: 1_000,
+  });
+
+  report();
+  for (let interval = 0; interval < 5; interval += 1) {
+    context.mock.timers.tick(10_000);
+    report();
+  }
+  assert.equal(lines.filter((line) => line.includes('"event":"speaker-client"')).length, 1);
+
+  context.mock.timers.tick(10_000);
+  report();
+  const metrics = lines.filter((line) => line.includes('"event":"speaker-client"'));
+  assert.equal(metrics.length, 2);
+  assert.match(metrics[1], /"intervalMs":60000/);
+  assert.match(metrics[1], /"capturedChunks":600/);
+  assert.match(metrics[1], /"sentChunks":594/);
+  assert.match(metrics[1], /"droppedChunks":6/);
+  session.end('test complete');
+});

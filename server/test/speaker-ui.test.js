@@ -18,6 +18,7 @@ test('speaker page inline script remains valid JavaScript', () => {
 });
 
 test('speaker page reports voiced audio and shows transcript recovery states', () => {
+  assert.match(speakHtml, /const AUDIO_STATS_INTERVAL_MS = 60_000;/);
   assert.match(speakHtml, /speechDetected: Boolean\(speechDetected\)/);
   assert.match(speakHtml, /Transcript stalled — reconnecting…/);
   assert.match(speakHtml, /Transcript reconnecting…/);

@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import {
+  ANOMALY_METRIC_LOG_INTERVAL_MS,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
   audioBufferLimitBytes,
   estimateQueuedAudioMs,
@@ -22,7 +23,6 @@ const GEMINI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
   512_000,
 );
 const PENDING_AUDIO_CHUNK_LIMIT = pendingAudioChunkLimit(LIVE_EDGE_MAX_QUEUE_SECONDS);
-const AUDIO_METRIC_LOG_INTERVAL_MS = 10_000;
 
 function tokenCount(value) {
   const number = Number(value);
@@ -151,11 +151,13 @@ export class Translator {
     this.turnNumber = 1;
     this.usageReportNumber = 0;
     this.pendingUsageMetadata = null;
+    this.goAwayReceived = false;
   }
 
   connect() {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
+      this.goAwayReceived = false;
       const url = `${WS_BASE}/ws/google.ai.generativelanguage.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
       const ws = new WebSocket(url);
       this.ws = ws;
@@ -172,10 +174,6 @@ export class Translator {
           this.ready = true;
           this.reconnectAttempts = 0;
           this.connectionNumber += 1;
-          console.log(
-            `[gemini:${this.targetLanguage}] setup complete ` +
-            `(connection ${this.connectionNumber}${this.resumptionHandle ? ', resumed' : ''})`,
-          );
           logAudioMetric({
             event: 'gemini-setup',
             sessionId: this.sessionId,
@@ -220,7 +218,18 @@ export class Translator {
       ws.on('close', (code, reasonBuf) => {
         const reason = reasonBuf?.toString?.() || '';
         this.#logPendingUsage(false, 'connection-close');
-        console.log(`[gemini:${this.targetLanguage}] closed (${code}${reason ? ' ' + reason : ''})`);
+        if (!this.closedByUs && !this.goAwayReceived) {
+          logAudioMetric({
+            event: 'gemini-unexpected-close',
+            sessionId: this.sessionId,
+            stream: this.streamKind,
+            apiTier: this.apiTier,
+            language: this.targetLanguage,
+            connection: this.connectionNumber,
+            code,
+            reason,
+          });
+        }
         this.ready = false;
         this.ws = null;
         if (!settled) {
@@ -275,7 +284,16 @@ export class Translator {
     const goAway = msg.goAway || msg.go_away;
     if (goAway) {
       const timeLeft = goAway.timeLeft || goAway.time_left || 'unknown';
-      console.log(`[gemini:${this.targetLanguage}] server GoAway (time left: ${JSON.stringify(timeLeft)})`);
+      this.goAwayReceived = true;
+      logAudioMetric({
+        event: 'gemini-goaway',
+        sessionId: this.sessionId,
+        stream: this.streamKind,
+        apiTier: this.apiTier,
+        language: this.targetLanguage,
+        connection: this.connectionNumber,
+        timeLeft,
+      });
     }
   }
 
@@ -355,7 +373,6 @@ export class Translator {
       return;
     }
     const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 10000);
-    console.log(`[gemini:${this.targetLanguage}] reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
     setTimeout(() => {
       if (this.closedByUs) return;
       this.connect().catch((err) => {
@@ -411,7 +428,7 @@ export class Translator {
 
   #logDropMetric(stage, queuedMs, bufferedBytes = 0) {
     const now = Date.now();
-    if (now - this.lastDropMetricAt < AUDIO_METRIC_LOG_INTERVAL_MS) return;
+    if (now - this.lastDropMetricAt < ANOMALY_METRIC_LOG_INTERVAL_MS) return;
     this.lastDropMetricAt = now;
     logAudioMetric({
       event: 'audio-dropped',

@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { Translator } from './translator.js';
 import {
+  ANOMALY_METRIC_LOG_INTERVAL_MS,
+  HEALTH_METRIC_LOG_INTERVAL_MS,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
   audioBufferLimitBytes,
   estimateQueuedAudioMs,
@@ -44,7 +46,6 @@ const LISTENER_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
   LIVE_EDGE_MAX_QUEUE_SECONDS,
   512_000,
 );
-const AUDIO_METRIC_LOG_INTERVAL_MS = 10_000;
 const SPEAKER_TRANSCRIPT_LANGUAGE = 'en';
 const MIN_AUDIO_IDLE_MINUTES = 60;
 const configuredAudioIdleMinutes = Number(process.env.SESSION_AUDIO_IDLE_MINUTES);
@@ -142,7 +143,7 @@ class LanguageChannel {
     });
     if (stall) this.#restartStalledTranslation(stall);
 
-    if (now - this.outputHealth.intervalStartedAt < AUDIO_METRIC_LOG_INTERVAL_MS) return;
+    if (now - this.outputHealth.intervalStartedAt < HEALTH_METRIC_LOG_INTERVAL_MS) return;
     logAudioMetric({
       event: 'listener-output-health',
       sessionId: this.session.id,
@@ -199,7 +200,7 @@ class LanguageChannel {
     const now = Date.now();
     const metrics = this.listenerAudioMetrics.get(ws) || { droppedChunks: 0, lastLogAt: 0 };
     metrics.droppedChunks += 1;
-    if (now - metrics.lastLogAt >= AUDIO_METRIC_LOG_INTERVAL_MS) {
+    if (now - metrics.lastLogAt >= ANOMALY_METRIC_LOG_INTERVAL_MS) {
       metrics.lastLogAt = now;
       logAudioMetric({
         event: 'audio-dropped',
@@ -281,6 +282,15 @@ class Session {
       sequenceGaps: 0,
       lastSequence: null,
       maxReportedCaptureAgeMs: 0,
+    };
+    this.speakerClientMetrics = {
+      intervalStartedAt: null,
+      intervalMs: 0,
+      capturedChunks: 0,
+      sentChunks: 0,
+      droppedChunks: 0,
+      peakBufferedBytes: 0,
+      currentBufferedBytes: 0,
     };
     this.listenerPlayerMetrics = new Map();
     this.audioIdleTimer = null;
@@ -441,7 +451,7 @@ class Session {
       }
     }
 
-    if (now - metrics.intervalStartedAt < AUDIO_METRIC_LOG_INTERVAL_MS) return;
+    if (now - metrics.intervalStartedAt < HEALTH_METRIC_LOG_INTERVAL_MS) return;
     logAudioMetric({
       event: 'speaker-ingress',
       sessionId: this.id,
@@ -462,18 +472,44 @@ class Session {
   }
 
   recordSpeakerClientMetrics(metrics = {}) {
+    const now = Date.now();
+    const aggregate = this.speakerClientMetrics;
+    aggregate.intervalMs += finiteNonNegative(metrics.intervalMs);
+    aggregate.capturedChunks += finiteNonNegative(metrics.capturedChunks);
+    aggregate.sentChunks += finiteNonNegative(metrics.sentChunks);
+    aggregate.droppedChunks += finiteNonNegative(metrics.droppedChunks);
+    aggregate.peakBufferedBytes = Math.max(
+      aggregate.peakBufferedBytes,
+      finiteNonNegative(metrics.peakBufferedBytes),
+    );
+    aggregate.currentBufferedBytes = finiteNonNegative(metrics.currentBufferedBytes);
+    if (
+      aggregate.intervalStartedAt !== null
+      && now - aggregate.intervalStartedAt < HEALTH_METRIC_LOG_INTERVAL_MS
+    ) {
+      return;
+    }
     logAudioMetric({
       event: 'speaker-client',
       sessionId: this.id,
       apiTier: this.apiTier,
-      intervalMs: finiteNonNegative(metrics.intervalMs),
-      capturedChunks: finiteNonNegative(metrics.capturedChunks),
-      sentChunks: finiteNonNegative(metrics.sentChunks),
-      droppedChunks: finiteNonNegative(metrics.droppedChunks),
-      peakBufferedBytes: finiteNonNegative(metrics.peakBufferedBytes),
-      currentBufferedBytes: finiteNonNegative(metrics.currentBufferedBytes),
+      intervalMs: aggregate.intervalMs,
+      capturedChunks: aggregate.capturedChunks,
+      sentChunks: aggregate.sentChunks,
+      droppedChunks: aggregate.droppedChunks,
+      peakBufferedBytes: aggregate.peakBufferedBytes,
+      currentBufferedBytes: aggregate.currentBufferedBytes,
       queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
     });
+    this.speakerClientMetrics = {
+      intervalStartedAt: now,
+      intervalMs: 0,
+      capturedChunks: 0,
+      sentChunks: 0,
+      droppedChunks: 0,
+      peakBufferedBytes: 0,
+      currentBufferedBytes: aggregate.currentBufferedBytes,
+    };
   }
 
   recordListenerPlayerMetrics(lang, metrics = {}) {
@@ -490,7 +526,10 @@ class Session {
       aggregate.maxBufferSeconds,
       finiteNonNegative(metrics.maxBufferSeconds),
     );
-    if (aggregate.intervalStartedAt !== 0 && now - aggregate.intervalStartedAt < AUDIO_METRIC_LOG_INTERVAL_MS) {
+    if (
+      aggregate.intervalStartedAt !== 0
+      && now - aggregate.intervalStartedAt < ANOMALY_METRIC_LOG_INTERVAL_MS
+    ) {
       this.listenerPlayerMetrics.set(lang, aggregate);
       return;
     }

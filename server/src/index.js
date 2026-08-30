@@ -202,6 +202,7 @@ function claimSpeakerInput(ws, session) {
 }
 
 function handleSpeaker(ws, session) {
+  const connectedAt = Date.now();
   session.addSpeakerSocket(ws);
   console.log(`[session:${session.id}] speaker page connected`);
   ws.send(JSON.stringify({ type: 'status', state: 'connected', sessionId: session.id }));
@@ -236,11 +237,14 @@ function handleSpeaker(ws, session) {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code) => {
     session.removeSpeakerSocket(ws);
     if (!session.releaseSpeaker(ws)) return;
     if (session.ended) return;
-    console.log(`[session:${session.id}] active speaker disconnected, grace ${SPEAKER_GRACE_MS / 1000}s`);
+    console.log(
+      `[session:${session.id}] active speaker disconnected ` +
+      `(code: ${code}, connectedMs: ${Date.now() - connectedAt}, graceSeconds: ${SPEAKER_GRACE_MS / 1000})`,
+    );
     broadcastToAll(session, { type: 'status', state: 'speaker-offline' });
     session.speakerGraceTimer = setTimeout(() => session.end(), SPEAKER_GRACE_MS);
   });
@@ -252,15 +256,17 @@ async function handleListener(ws, session, lang) {
     ws.close(4400, 'unsupported language');
     return;
   }
+  let channel;
   try {
-    await session.addListener(ws, lang);
+    channel = await session.addListener(ws, lang);
   } catch (err) {
     console.error(`[session:${session.id}] failed to open ${lang} channel:`, err.message);
     ws.send(JSON.stringify({ type: 'error', message: 'Could not start translation for this language. Try again.' }));
     ws.close(4500, 'translator connect failed');
     return;
   }
-  console.log(`[session:${session.id}] listener joined (${lang})`);
+  const connectedAt = Date.now();
+  console.log(`[session:${session.id}] listener joined (${lang}, active: ${channel.listeners.size})`);
   ws.send(JSON.stringify({ type: 'status', state: 'connected', lang, title: session.title }));
   if (!session.speakerWs) {
     ws.send(JSON.stringify({
@@ -281,9 +287,12 @@ async function handleListener(ws, session, lang) {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code) => {
     session.removeListener(ws, lang);
-    console.log(`[session:${session.id}] listener left (${lang})`);
+    console.log(
+      `[session:${session.id}] listener left ` +
+      `(${lang}, code: ${code}, connectedMs: ${Date.now() - connectedAt}, active: ${channel.listeners.size})`,
+    );
   });
 }
 
@@ -292,17 +301,20 @@ function broadcastToAll(session, obj) {
 }
 
 server.listen(PORT, () => {
-  const nets = os.networkInterfaces();
-  const lanIps = Object.values(nets)
-    .flat()
-    .filter((n) => n && n.family === 'IPv4' && !n.internal)
-    .map((n) => n.address);
-  console.log(`Glotta server listening on port ${PORT}`);
   console.log(
     LIVE_EDGE_MAX_QUEUE_SECONDS > 0
-      ? `Live-edge policy enabled: ${LIVE_EDGE_MAX_QUEUE_SECONDS}s per network queue, ${LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS}s listener buffer`
-      : 'Live-edge policy disabled: observing legacy queue behavior',
+      ? `Glotta server listening on port ${PORT} ` +
+        `(live-edge: ${LIVE_EDGE_MAX_QUEUE_SECONDS}s network queues, ${LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS}s listener buffer)`
+      : `Glotta server listening on port ${PORT} (live-edge disabled)`,
   );
-  console.log(`  Local:   http://localhost:${PORT}`);
-  for (const ip of lanIps) console.log(`  Network: http://${ip}:${PORT}`);
+  // Render only needs the bound port. Keep LAN addresses available for local
+  // phone testing without adding deployment-only startup noise.
+  if (!process.env.RENDER) {
+    const lanIps = Object.values(os.networkInterfaces())
+      .flat()
+      .filter((network) => network && network.family === 'IPv4' && !network.internal)
+      .map((network) => network.address);
+    console.log(`  Local:   http://localhost:${PORT}`);
+    for (const ip of lanIps) console.log(`  Network: http://${ip}:${PORT}`);
+  }
 });

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  ANOMALY_METRIC_LOG_INTERVAL_MS,
+  HEALTH_METRIC_LOG_INTERVAL_MS,
   LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS,
   audioBufferLimitBytes,
   encodedPcmBytesPerSecond,
@@ -8,6 +10,11 @@ import {
   parseLiveEdgeMaxQueueSeconds,
   pendingAudioChunkLimit,
 } from '../src/liveEdge.js';
+
+test('healthy telemetry is summarized less often than active anomalies', () => {
+  assert.equal(HEALTH_METRIC_LOG_INTERVAL_MS, 60_000);
+  assert.equal(ANOMALY_METRIC_LOG_INTERVAL_MS, 10_000);
+});
 
 function simulateDegradedUpload({ limitBytes, seconds = 30 }) {
   const bytesPerSecond = encodedPcmBytesPerSecond(16_000);

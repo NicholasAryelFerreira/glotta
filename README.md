@@ -125,7 +125,7 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 - Listeners returning after a longer phone-app switch are asked to tap once to restart browser audio while captions remain connected.
 - Live transcript and captions are capped in the browser to prevent long sermons from overloading the page.
 - Gemini streams use session resumption and context compression across periodic connection replacements, with a short catch-up window for brief gaps.
-- Audio queue, reconnect, first-output, and dropped-audio metrics are emitted as structured `[audio-metrics]` logs.
+- Audio queue, reconnect, first-output, and dropped-audio metrics are emitted as structured `[audio-metrics]` logs. Healthy stream counters are aggregated into one-minute summaries, while stalls and queue drops remain immediate or rate-limited to ten seconds.
 - `LIVE_EDGE_MAX_QUEUE_SECONDS` is an opt-in safety flag. Leave it at `0` for legacy behavior; set it to `1` for a one-second network-queue budget and a two-second listener buffer. Enabled values are capped at one second so Glotta's own buffering cannot exceed five seconds even if the setting is accidentally higher.
 - A session automatically ends after 60 minutes without incoming speaker audio.
 

@@ -4,6 +4,13 @@ export const LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS = 2;
 const AUDIO_CHUNKS_PER_SECOND = 10;
 const JSON_ENVELOPE_BYTES_PER_CHUNK = 128;
 
+// Healthy streams change slowly, so one aggregate per minute is enough to
+// establish an end-to-end baseline without crowding incidents out of Render's
+// retained log view. Anomalies stay more frequent so a sustained queue problem
+// remains visible while it is happening.
+export const HEALTH_METRIC_LOG_INTERVAL_MS = 60_000;
+export const ANOMALY_METRIC_LOG_INTERVAL_MS = 10_000;
+
 /**
  * A value of 0 disables the new policy. Enabled values are deliberately capped
  * at one second so the three network queues plus the listener's two-second
