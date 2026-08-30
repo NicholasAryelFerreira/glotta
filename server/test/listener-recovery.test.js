@@ -16,6 +16,12 @@ test('listener loads only the selected provider target languages', () => {
   assert.match(joinHtml, /sess\.provider \|\| 'gemini'/);
 });
 
+test('listener UI does not expose the provider or earphone instruction', () => {
+  assert.doesNotMatch(joinHtml, /Google Gemini|OpenAI GPT/);
+  assert.doesNotMatch(joinHtml, /Put in your earphones/);
+  assert.match(joinHtml, /sessionInfo'\)\.textContent = `Session \$\{sess\.sessionId\}`/);
+});
+
 test('audio recovery is bounded and replaces a stale listener socket', () => {
   assert.match(joinHtml, /const AUDIO_SETUP_TIMEOUT_MS = 5_000;/);
   assert.match(joinHtml, /async function resumeListening\(\)[\s\S]*?replaceListenerSocket\(\);/);

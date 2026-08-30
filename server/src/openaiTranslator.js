@@ -9,7 +9,6 @@ import {
 } from './liveEdge.js';
 
 const MODEL = 'gpt-realtime-translate';
-const TRANSCRIPTION_MODEL = 'gpt-realtime-whisper';
 const WS_URL = `wss://api.openai.com/v1/realtime/translations?model=${MODEL}`;
 const OPENAI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
   24_000,
@@ -42,14 +41,13 @@ export function resamplePcm16Base64(base64Chunk, inputRate = 16_000, outputRate 
   return output.toString('base64');
 }
 
-export function openAISessionUpdate(targetLanguage, { inputAudioTranscription = true } = {}) {
+export function openAISessionUpdate(targetLanguage) {
+  // Translation sessions emit source transcript deltas themselves, so do not
+  // attach a separate transcription model to the session.
   return {
     type: 'session.update',
     session: {
       audio: {
-        ...(inputAudioTranscription
-          ? { input: { transcription: { model: TRANSCRIPTION_MODEL } } }
-          : {}),
         output: { language: targetLanguage },
       },
     },
@@ -70,7 +68,6 @@ export class OpenAITranslator {
     onStatus,
     sessionId = 'unknown',
     streamKind = 'listener',
-    inputAudioTranscription = true,
   }) {
     this.apiKey = apiKey;
     this.targetLanguage = targetLanguage;
@@ -80,7 +77,6 @@ export class OpenAITranslator {
     this.onStatus = onStatus;
     this.sessionId = sessionId;
     this.streamKind = streamKind;
-    this.inputAudioTranscription = inputAudioTranscription;
     this.ws = null;
     this.ready = false;
     this.closedByUs = false;
@@ -106,9 +102,7 @@ export class OpenAITranslator {
       let settled = false;
 
       ws.on('open', () => {
-        ws.send(JSON.stringify(openAISessionUpdate(this.targetLanguage, {
-          inputAudioTranscription: this.inputAudioTranscription,
-        })));
+        ws.send(JSON.stringify(openAISessionUpdate(this.targetLanguage)));
       });
 
       ws.on('message', (raw) => {

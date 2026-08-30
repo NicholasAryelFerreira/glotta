@@ -5,19 +5,14 @@ import {
   resamplePcm16Base64,
 } from '../src/openaiTranslator.js';
 
-test('OpenAI session selects the target language and optional source transcription', () => {
+test('OpenAI session selects the target language without a separate transcription model', () => {
   assert.deepEqual(openAISessionUpdate('pt'), {
     type: 'session.update',
     session: {
       audio: {
-        input: { transcription: { model: 'gpt-realtime-whisper' } },
         output: { language: 'pt' },
       },
     },
-  });
-  assert.deepEqual(openAISessionUpdate('es', { inputAudioTranscription: false }), {
-    type: 'session.update',
-    session: { audio: { output: { language: 'es' } } },
   });
 });
 

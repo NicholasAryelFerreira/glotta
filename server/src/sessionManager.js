@@ -118,9 +118,6 @@ class LanguageChannel {
       },
       sessionId: this.session.id,
       streamKind: 'listener',
-      // OpenAI input transcription uses a second model. The dedicated speaker
-      // stream already provides it, so do not duplicate that cost per language.
-      inputAudioTranscription: this.session.provider !== 'openai',
     });
   }
 
@@ -275,6 +272,7 @@ class Session {
     this.speakerTranscriptTranslator = null; // hidden provider stream for speaker transcript even with no listeners
     this.speakerTranscriptWatchdog = new TranscriptWatchdog();
     this.speakerTranscriptRestarting = false;
+    this.speakerTranscriptRecoveryStartedAt = null;
     this.ended = false;
     this.lastAudioAt = Date.now();
     this.speakerIngressMetrics = {
@@ -361,6 +359,16 @@ class Session {
       onAudio: () => {},
       onTranscript: (kind, text) => {
         if (kind === 'input') {
+          if (this.speakerTranscriptRecoveryStartedAt !== null) {
+            logAudioMetric({
+              event: 'transcript-recovered',
+              sessionId: this.id,
+              stream: 'speaker-transcript',
+              provider: this.provider,
+              recoveryMs: Date.now() - this.speakerTranscriptRecoveryStartedAt,
+            });
+            this.speakerTranscriptRecoveryStartedAt = null;
+          }
           this.speakerTranscriptWatchdog.recordTranscript();
           this.sendToSpeaker({ type: 'transcript', kind: 'input', text });
         }
@@ -420,6 +428,7 @@ class Session {
       elapsedSinceTranscriptMs: stall.elapsedSinceTranscriptMs,
       action: 'fresh-reconnect',
     });
+    this.speakerTranscriptRecoveryStartedAt = Date.now();
     this.sendToSpeaker({ type: 'status', state: 'transcript-stalled' });
     this.speakerTranscriptTranslator?.close();
     this.speakerTranscriptTranslator = null;

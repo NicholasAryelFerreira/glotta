@@ -183,6 +183,39 @@ test('audio telemetry logs counts without audio or transcript content', (context
   session.end('test complete');
 });
 
+test('speaker transcript recovery logs timing without transcript content', (context) => {
+  const lines = [];
+  context.mock.method(console, 'log', (...args) => { lines.push(args.join(' ')); });
+  const manager = new SessionManager({ gemini: 'gemini-test-key', openai: 'openai-test-key' });
+  let translatorOptions = null;
+  manager.createTranslator = (_provider, options) => {
+    translatorOptions = options;
+    return {
+      ready: true,
+      connect: async () => {},
+      sendAudio() {},
+      close() {},
+    };
+  };
+  const session = manager.create({ id: 'RECOVR', provider: 'openai' });
+  lines.length = 0;
+
+  for (let chunk = 0; chunk < 200; chunk += 1) {
+    session.pushAudio('audio-chunk', { speechDetected: true });
+  }
+  translatorOptions.onTranscript('input', 'content that must not be logged');
+
+  const metrics = lines.filter((line) => line.startsWith('[audio-metrics]'));
+  assert.equal(metrics.length, 2);
+  assert.match(metrics[0], /"event":"transcript-stall"/);
+  assert.match(metrics[0], /"action":"fresh-reconnect"/);
+  assert.match(metrics[1], /"event":"transcript-recovered"/);
+  assert.match(metrics[1], /"provider":"openai"/);
+  assert.match(metrics[1], /"recoveryMs":\d+/);
+  assert.doesNotMatch(metrics.join('\n'), /content that must not be logged/);
+  session.end('test complete');
+});
+
 test('speaker client health reports aggregate older ten-second clients into one-minute logs', (context) => {
   context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1 });
   const lines = [];
