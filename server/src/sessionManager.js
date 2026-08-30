@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { OpenAITranslator } from './openaiTranslator.js';
 import { Translator } from './translator.js';
 import {
   ANOMALY_METRIC_LOG_INTERVAL_MS,
@@ -38,7 +39,7 @@ function finiteNonNegative(value) {
   return Number.isFinite(number) && number >= 0 ? number : 0;
 }
 
-// How long an empty language channel keeps its Gemini session alive, so a
+// How long an empty language channel keeps its provider session alive, so a
 // listener refreshing their page doesn't tear down and recreate the session.
 const CHANNEL_LINGER_MS = 60_000;
 const LISTENER_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
@@ -56,14 +57,13 @@ const SESSION_AUDIO_IDLE_MS = SESSION_AUDIO_IDLE_MINUTES * 60_000;
 export const SESSION_MAX_DURATION_MINUTES = 120;
 const SESSION_MAX_DURATION_MS = SESSION_MAX_DURATION_MINUTES * 60_000;
 
-// The paid key is selected only for the one exact value sent by the UI. Older
-// clients, omitted values, and unexpected values all stay on the free tier.
-export function normalizeApiTier(apiTier) {
-  return apiTier === 'paid' ? 'paid' : 'free';
+// Gemini is the safe default for older clients and omitted or unexpected values.
+export function normalizeProvider(provider) {
+  return provider === 'openai' ? 'openai' : 'gemini';
 }
 
 /**
- * One language channel inside a session: a single Gemini translator shared by
+ * One language channel inside a session: one provider translator shared by
  * every listener of that language.
  */
 class LanguageChannel {
@@ -80,8 +80,7 @@ class LanguageChannel {
   }
 
   #createTranslator() {
-    return new Translator({
-      apiKey: this.session.apiKey,
+    return this.session.manager.createTranslator(this.session.provider, {
       targetLanguage: this.lang,
       echoTargetLanguage: this.session.echoTargetLanguage,
       onAudio: (data) => {
@@ -91,8 +90,8 @@ class LanguageChannel {
       },
       onTranscript: (kind, text) => {
         if (kind === 'output') {
-          // Captions prove the translation is semantically advancing. Gemini
-          // can keep emitting silent PCM while a language stream is stuck, so
+          // Captions prove the translation is semantically advancing. A
+          // provider can keep emitting silent PCM while a stream is stuck, so
           // audio packets alone must not reset the recovery watchdog.
           this.outputWatchdog.recordTranscript();
           this.outputHealth.transcriptEvents += 1;
@@ -119,8 +118,9 @@ class LanguageChannel {
       },
       sessionId: this.session.id,
       streamKind: 'listener',
-      apiTier: this.session.apiTier,
-      billingApiTier: this.session.billingApiTier,
+      // OpenAI input transcription uses a second model. The dedicated speaker
+      // stream already provides it, so do not duplicate that cost per language.
+      inputAudioTranscription: this.session.provider !== 'openai',
     });
   }
 
@@ -151,7 +151,7 @@ class LanguageChannel {
       event: 'listener-output-health',
       sessionId: this.session.id,
       stream: 'listener',
-      apiTier: this.session.apiTier,
+      provider: this.session.provider,
       language: this.lang,
       intervalMs: now - this.outputHealth.intervalStartedAt,
       listeners: this.listeners.size,
@@ -173,7 +173,7 @@ class LanguageChannel {
       event: 'translation-stall',
       sessionId: this.session.id,
       stream: 'listener',
-      apiTier: this.session.apiTier,
+      provider: this.session.provider,
       language: this.lang,
       voicedAudioMs: stall.voicedAudioMs,
       elapsedSinceTranscriptMs: stall.elapsedSinceTranscriptMs,
@@ -209,7 +209,7 @@ class LanguageChannel {
         event: 'audio-dropped',
         sessionId: this.session.id,
         stream: 'listener',
-        apiTier: this.session.apiTier,
+        provider: this.session.provider,
         language: this.lang,
         stage: 'listener-websocket',
         queuedMs: estimateQueuedAudioMs(ws.bufferedAmount, 24_000),
@@ -260,21 +260,19 @@ class LanguageChannel {
 }
 
 class Session {
-  constructor(manager, { title, echoTargetLanguage = true, id, apiTier }) {
+  constructor(manager, { title, echoTargetLanguage = true, id, provider }) {
     this.manager = manager;
     this.id = id || makeSessionId();
     this.title = title || 'Live translation';
     this.echoTargetLanguage = Boolean(echoTargetLanguage);
-    this.apiTier = normalizeApiTier(apiTier);
-    this.billingApiTier = manager.billingApiTierForTier(this.apiTier);
-    this.apiKey = manager.apiKeyForTier(this.apiTier);
+    this.provider = normalizeProvider(provider);
     this.createdAt = Date.now();
     this.speakerSockets = new Set();
     this.speakerWs = null;
     this.speakerGraceTimer = null;
     this.channels = new Map(); // lang -> LanguageChannel
     this.transcriptChannel = null; // listener channel that mirrors input transcripts to the speaker as a fallback
-    this.speakerTranscriptTranslator = null; // hidden Gemini stream for speaker transcript even with no listeners
+    this.speakerTranscriptTranslator = null; // hidden provider stream for speaker transcript even with no listeners
     this.speakerTranscriptWatchdog = new TranscriptWatchdog();
     this.speakerTranscriptRestarting = false;
     this.ended = false;
@@ -357,8 +355,7 @@ class Session {
 
   ensureSpeakerTranscript() {
     if (this.speakerTranscriptTranslator) return;
-    const translator = new Translator({
-      apiKey: this.apiKey,
+    const translator = this.manager.createTranslator(this.provider, {
       targetLanguage: SPEAKER_TRANSCRIPT_LANGUAGE,
       echoTargetLanguage: false,
       onAudio: () => {},
@@ -380,8 +377,6 @@ class Session {
       },
       sessionId: this.id,
       streamKind: 'speaker-transcript',
-      apiTier: this.apiTier,
-      billingApiTier: this.billingApiTier,
       // This stream only powers "What the model hears". Its translated output
       // transcript was ignored, so disabling it cannot change the speaker UI.
       outputAudioTranscription: false,
@@ -392,7 +387,7 @@ class Session {
     });
   }
 
-  /** Fan one base64 PCM chunk out to Gemini and every active language translator. */
+  /** Fan one base64 PCM chunk out to the transcript and active language translators. */
   pushAudio(base64Chunk, metadata = {}) {
     if (this.ended) return;
     this.lastAudioAt = Date.now();
@@ -406,7 +401,7 @@ class Session {
     if (stall) this.#restartStalledSpeakerTranscript(stall);
     for (const channel of this.channels.values()) {
       // Keep an empty channel available briefly for a listener refresh, but do
-      // not pay to feed Gemini while nobody can receive that language.
+      // not pay to feed a provider while nobody can receive that language.
       if (channel.listeners.size === 0) continue;
       channel.translator.sendAudio(base64Chunk);
       channel.recordSpeakerAudio(metadata);
@@ -420,7 +415,7 @@ class Session {
       event: 'transcript-stall',
       sessionId: this.id,
       stream: 'speaker-transcript',
-      apiTier: this.apiTier,
+      provider: this.provider,
       voicedAudioMs: stall.voicedAudioMs,
       elapsedSinceTranscriptMs: stall.elapsedSinceTranscriptMs,
       action: 'fresh-reconnect',
@@ -428,7 +423,7 @@ class Session {
     this.sendToSpeaker({ type: 'status', state: 'transcript-stalled' });
     this.speakerTranscriptTranslator?.close();
     this.speakerTranscriptTranslator = null;
-    // A fresh logical Gemini session avoids resuming a connection that is open
+    // A fresh logical provider session avoids resuming a connection that is open
     // but no longer emitting input transcription. Pending audio stays capped at
     // the live edge by Translator while the replacement completes setup.
     this.ensureSpeakerTranscript();
@@ -458,7 +453,7 @@ class Session {
     logAudioMetric({
       event: 'speaker-ingress',
       sessionId: this.id,
-      apiTier: this.apiTier,
+      provider: this.provider,
       intervalMs: now - metrics.intervalStartedAt,
       receivedChunks: metrics.receivedChunks,
       sequenceGaps: metrics.sequenceGaps,
@@ -495,7 +490,7 @@ class Session {
     logAudioMetric({
       event: 'speaker-client',
       sessionId: this.id,
-      apiTier: this.apiTier,
+      provider: this.provider,
       intervalMs: aggregate.intervalMs,
       capturedChunks: aggregate.capturedChunks,
       sentChunks: aggregate.sentChunks,
@@ -539,7 +534,7 @@ class Session {
     logAudioMetric({
       event: 'listener-player',
       sessionId: this.id,
-      apiTier: this.apiTier,
+      provider: this.provider,
       language: lang,
       queuedMs: aggregate.queuedMs,
       droppedMs: aggregate.droppedMs,
@@ -563,6 +558,7 @@ class Session {
       try {
         await channel.translator.connect();
       } catch (err) {
+        channel.close();
         this.channels.delete(lang);
         if (this.transcriptChannel === channel) this.transcriptChannel = null;
         throw err;
@@ -626,25 +622,40 @@ class Session {
 
 export class SessionManager {
   constructor(apiKeys) {
-    // Accepting the former string shape keeps SessionManager convenient for
-    // isolated tests and older internal callers; production passes both keys.
+    // A string keeps isolated tests concise. The former { paid } shape remains
+    // accepted so an in-flight deployment can roll forward without key churn.
     this.apiKeys = typeof apiKeys === 'string'
-      ? { free: apiKeys, paid: apiKeys }
-      : apiKeys;
+      ? { gemini: apiKeys, openai: apiKeys }
+      : {
+          gemini: apiKeys?.gemini ?? apiKeys?.paid,
+          openai: apiKeys?.openai,
+        };
     this.sessions = new Map(); // id -> Session
   }
 
-  apiKeyForTier(apiTier) {
-    // Temporary reliability override: preserve the speaker's Free/Paid UI
-    // selection on the session, but route both selections through the paid
-    // Gemini project while the Free-tier Live Translate stall is investigated.
-    const apiKey = this.apiKeys?.paid;
-    if (!apiKey) throw new Error('Missing Gemini API key for paid tier');
+  hasProvider(provider) {
+    return Boolean(this.apiKeys?.[normalizeProvider(provider)]);
+  }
+
+  apiKeyForProvider(provider) {
+    const normalized = normalizeProvider(provider);
+    const apiKey = this.apiKeys?.[normalized];
+    if (!apiKey) {
+      const name = normalized === 'openai' ? 'OpenAI' : 'paid Gemini';
+      throw new Error(`Missing ${name} API key`);
+    }
     return apiKey;
   }
 
-  billingApiTierForTier(_apiTier) {
-    return 'paid';
+  createTranslator(provider, options) {
+    const normalized = normalizeProvider(provider);
+    const TranslatorClass = normalized === 'openai' ? OpenAITranslator : Translator;
+    return new TranslatorClass({
+      ...options,
+      apiKey: this.apiKeyForProvider(normalized),
+      provider: normalized,
+      billingApiTier: 'paid',
+    });
   }
 
   create(opts = {}) {
@@ -652,11 +663,13 @@ export class SessionManager {
     if (opts.id && !id) throw new Error('Invalid session code');
     // Reviving a code that still exists (e.g. two speaker tabs) is a no-op.
     if (id && this.sessions.has(id)) return this.sessions.get(id);
-    const session = new Session(this, { ...opts, id });
+    const provider = normalizeProvider(opts.provider);
+    this.apiKeyForProvider(provider);
+    const session = new Session(this, { ...opts, id, provider });
     this.sessions.set(session.id, session);
     console.log(
       `[session:${session.id}] ${id ? 'revived' : 'created'} ` +
-      `("${session.title}", tier: ${session.apiTier})`,
+      `("${session.title}", provider: ${session.provider})`,
     );
     return session;
   }

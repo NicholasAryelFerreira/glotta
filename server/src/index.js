@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
-import { isValidSessionId, normalizeApiTier, SessionManager } from './sessionManager.js';
-import { LANGUAGES, isSupportedLanguage } from './languages.js';
+import { isValidSessionId, normalizeProvider, SessionManager } from './sessionManager.js';
+import { isSupportedLanguage, languagesForProvider } from './languages.js';
 import {
   LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
@@ -16,20 +16,20 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const API_KEYS = {
-  free: process.env.GEMINI_API_KEY_FREE,
-  paid: process.env.GEMINI_API_KEY_PAID,
+  gemini: process.env.GEMINI_API_KEY_PAID,
+  openai: process.env.OPENAI_API_KEY,
 };
 // Shared passcode required to *create* a session (i.e. to be the speaker), so
 // strangers who find the public URL can't spin up sessions on our Gemini key.
 // If unset, creation is open (e.g. for local development).
 const CREATE_PASSWORD = process.env.PASSWORD;
 
-const missingApiKeyTiers = Object.entries(API_KEYS)
-  .filter(([, apiKey]) => !apiKey)
-  .map(([tier]) => tier);
-if (missingApiKeyTiers.length > 0) {
-  console.error('Missing Gemini API key(s) for: ' + missingApiKeyTiers.join(', ') + '. Copy .env.example to .env and set both keys.');
+if (!API_KEYS.gemini) {
+  console.error('Missing GEMINI_API_KEY_PAID. Copy .env.example to .env and set the paid Gemini key.');
   process.exit(1);
+}
+if (!API_KEYS.openai) {
+  console.warn('No OPENAI_API_KEY set — the OpenAI GPT provider will be unavailable.');
 }
 
 if (!CREATE_PASSWORD) {
@@ -63,8 +63,9 @@ function baseUrl(req) {
   return process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
 }
 
-app.get('/api/languages', (_req, res) => {
-  res.json({ languages: LANGUAGES });
+app.get('/api/languages', (req, res) => {
+  const provider = normalizeProvider(req.query.provider);
+  res.json({ provider, languages: languagesForProvider(provider) });
 });
 
 app.get('/api/config', (req, res) => {
@@ -75,31 +76,43 @@ app.get('/api/config', (req, res) => {
     listenerMaxBufferSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS > 0
       ? LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS
       : 4,
+    providers: {
+      gemini: manager.hasProvider('gemini'),
+      openai: manager.hasProvider('openai'),
+    },
   });
 });
 
 app.post('/api/sessions', (req, res) => {
-  const { title, echoTargetLanguage, password, sessionId, apiTier } = req.body || {};
+  const { title, echoTargetLanguage, password, sessionId, provider } = req.body || {};
   if (CREATE_PASSWORD && password !== CREATE_PASSWORD) {
     return res.status(401).json({ error: 'Incorrect password' });
   }
   if (sessionId && !isValidSessionId(sessionId)) {
     return res.status(400).json({ error: 'Invalid session code' });
   }
-  const requestedApiTier = normalizeApiTier(apiTier);
+  const requestedProvider = normalizeProvider(provider);
   const existingSession = sessionId ? manager.get(sessionId) : null;
-  if (existingSession && existingSession.apiTier !== requestedApiTier) {
+  if (existingSession && existingSession.provider !== requestedProvider) {
     return res.status(409).json({
-      error: 'This session is already using the ' + existingSession.apiTier + ' option. Select ' + existingSession.apiTier + ' to reconnect.',
+      error: 'This session is already using ' + existingSession.provider + '. Select the same provider to reconnect.',
     });
+  }
+  if (!manager.hasProvider(requestedProvider)) {
+    return res.status(503).json({ error: 'The selected translation provider is not configured.' });
   }
   // sessionId is optional: the home page omits it (new code), while the speaker
   // page passes it to revive its session under the same code after a restart.
-  const session = manager.create({ title, echoTargetLanguage, id: sessionId, apiTier: requestedApiTier });
+  const session = manager.create({
+    title,
+    echoTargetLanguage,
+    id: sessionId,
+    provider: requestedProvider,
+  });
   res.json({
     sessionId: session.id,
     title: session.title,
-    apiTier: session.apiTier,
+    provider: session.provider,
     joinUrl: `${baseUrl(req)}/join/${session.id}`,
   });
 });
@@ -110,7 +123,7 @@ app.get('/api/sessions/:id', (req, res) => {
   res.json({
     sessionId: session.id,
     title: session.title,
-    apiTier: session.apiTier,
+    provider: session.provider,
     speakerOnline: Boolean(session.speakerWs && session.speakerWs.readyState === session.speakerWs.OPEN),
     activeLanguages: [...session.channels.keys()],
   });
@@ -251,7 +264,7 @@ function handleSpeaker(ws, session) {
 }
 
 async function handleListener(ws, session, lang) {
-  if (!lang || !isSupportedLanguage(lang)) {
+  if (!lang || !isSupportedLanguage(lang, session.provider)) {
     ws.send(JSON.stringify({ type: 'error', message: `Unsupported language: ${lang}` }));
     ws.close(4400, 'unsupported language');
     return;

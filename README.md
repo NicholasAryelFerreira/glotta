@@ -1,6 +1,6 @@
 # Glotta
 
-Glotta is a real-time translation platform for lectures, trainings, sermons, and other live spoken events, using speech-to-speech LLMs. A speaker starts one live session, shares a QR code, and listeners join from their phone browser to hear translated audio with captions in 70+ languages.
+Glotta is a real-time translation platform for lectures, trainings, sermons, and other live spoken events, using speech-to-speech LLMs. A speaker starts one live session, chooses Google Gemini or OpenAI GPT, shares a QR code, and listeners join from their phone browser to hear translated audio with captions.
 
 <p align="center">
   <img src="docs/screenshots/home-session.png" alt="Glotta session setup screen" width="260">
@@ -12,33 +12,33 @@ Glotta is a real-time translation platform for lectures, trainings, sermons, and
 
 - Creates a speaker-led translation session with a QR join link.
 - Streams microphone or sound-board audio to a Node.js relay server over WebSockets.
-- Uses Gemini Live Translate to generate translated speech and captions.
-- Defaults each new session to the free Gemini key, with an explicit paid option for sensitive or confidential content.
-- Supports multiple listener languages at the same time, with one shared Gemini stream per language.
+- Uses Gemini Live Translate or OpenAI `gpt-realtime-translate` to generate translated speech and captions.
+- Defaults each new session to paid Gemini, with an OpenAI GPT provider option for comparison and fallback.
+- Supports multiple listener languages at the same time, with one shared provider stream per language.
 - Lets listeners join from a browser without installing an app.
 - Shows the speaker live listener counts, an audio input meter, and a bounded source transcript.
 
 ## How it works
 
 ```text
-Speaker browser/app -> PCM audio over WebSocket -> Node relay server -> Gemini Live Translate
+Speaker browser/app -> PCM audio over WebSocket -> Node relay server -> Gemini or OpenAI
                                                         |
                                                         v
 Listener browser <- translated audio + captions over WebSocket
 ```
 
-The server keeps both Gemini API keys private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use a continuous Web Audio playback queue that stays close to live and drops stale audio rather than drifting far behind.
+The server keeps both provider API keys private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use a continuous Web Audio playback queue that stays close to live and drops stale audio rather than drifting far behind.
 
-## Free and paid Gemini options
+## Translation providers
 
-The browser landing page shows a Free/Paid toggle below the weekly-session button. Free is selected on every fresh visit and is also the server fallback when a client does not send a selection.
+The browser landing page shows a Google Gemini/OpenAI GPT selector below the weekly-session button. Gemini is selected by default and is also the server fallback when a client does not send a provider.
 
-| Option | When it is used | User guidance |
+| Provider | Target output languages | Notes |
 | --- | --- | --- |
-| Free | Default for new and weekly sessions | Transmitted data is used to improve Google products. Use only with content that is not confidential. |
-| Paid | Only after the speaker manually selects Paid | Use with discretion because it charges the app administrator. Appropriate for sensitive or confidential content; the data is not stored. |
+| Google Gemini | 70+ | Uses `gemini-3.5-live-translate-preview` and the paid Gemini key. |
+| OpenAI GPT | 13 | Uses `gpt-realtime-translate`, which automatically detects 70+ spoken input languages. |
 
-The browser sends only the selected option to Glotta. Both API keys remain on the relay server, and every Gemini stream created for a session uses that session's selected key. The speaker page remembers the selection so recovery after a Render restart preserves it. Glotta streams audio and captions in memory and does not persist them to a database or file. The option is fixed for the life of an active session; reconnecting the weekly code with the other option shows an error instead of silently switching keys.
+The browser sends only the selected provider to Glotta. Both API keys remain on the relay server. The speaker page remembers the provider so recovery after a Render restart preserves it. Glotta streams audio and captions in memory and does not persist them to a database or file. The provider is fixed for the life of an active session; reconnecting the weekly code with the other provider shows an error instead of silently switching it.
 
 ## Repository layout
 
@@ -51,7 +51,8 @@ The browser sends only the selected option to Glotta. Both API keys remain on th
 ## Prerequisites
 
 - Node.js 20.19.4 or newer.
-- Two Gemini API keys with access to Gemini Live Translate: one free-tier key and one paid-tier key.
+- A paid Gemini API key with access to Gemini Live Translate.
+- An OpenAI API key with access to `gpt-realtime-translate` for the optional OpenAI provider.
 - A public HTTPS deployment for real services, or a shared local network for testing.
 
 ## Run the relay server locally
@@ -66,8 +67,8 @@ npm install
 Create a `.env` file in `server/`:
 
 ```env
-GEMINI_API_KEY_FREE=your-free-gemini-key
 GEMINI_API_KEY_PAID=your-paid-gemini-key
+OPENAI_API_KEY=your-openai-key
 PASSWORD=choose-a-speaker-password
 LIVE_EDGE_MAX_QUEUE_SECONDS=0
 ```
@@ -108,8 +109,8 @@ eas build --platform ios --profile preview
 Deploy `server/` to a Node host such as Render, Railway, Fly.io, or a VPS. Configure:
 
 ```env
-GEMINI_API_KEY_FREE=your-free-gemini-key
 GEMINI_API_KEY_PAID=your-paid-gemini-key
+OPENAI_API_KEY=your-openai-key
 PASSWORD=choose-a-speaker-password
 PUBLIC_BASE_URL=https://your-public-url.example.com
 ```
@@ -124,7 +125,7 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 - Listener playback uses one continuous PCM queue with a small buffer, smooth underrun recovery, and stale-audio dropping.
 - Listeners returning after a longer phone-app switch are asked to tap once to restart browser audio while captions remain connected.
 - Live transcript and captions are capped in the browser to prevent long sermons from overloading the page.
-- Gemini streams use session resumption and context compression across periodic connection replacements, with a short catch-up window for brief gaps.
+- Gemini streams use session resumption and context compression across periodic connection replacements; both providers use a short live-edge catch-up window for brief gaps.
 - Each listener language restarts independently after 20 seconds of voiced source audio without translated captions; audio packets alone do not count as healthy output because they may contain silence.
 - Audio queue, reconnect, first-output, and dropped-audio metrics are emitted as structured `[audio-metrics]` logs. Healthy stream counters are aggregated into one-minute summaries, while stalls and queue drops remain immediate or rate-limited to ten seconds.
 - `LIVE_EDGE_MAX_QUEUE_SECONDS` is an opt-in safety flag. Leave it at `0` for legacy behavior; set it to `1` for a one-second network-queue budget and a two-second listener buffer. Enabled values are capped at one second so Glotta's own buffering cannot exceed five seconds even if the setting is accidentally higher.

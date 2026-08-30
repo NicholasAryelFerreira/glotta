@@ -1,0 +1,334 @@
+import WebSocket from 'ws';
+import {
+  ANOMALY_METRIC_LOG_INTERVAL_MS,
+  LIVE_EDGE_MAX_QUEUE_SECONDS,
+  audioBufferLimitBytes,
+  estimateQueuedAudioMs,
+  logAudioMetric,
+  pendingAudioChunkLimit,
+} from './liveEdge.js';
+
+const MODEL = 'gpt-realtime-translate';
+const TRANSCRIPTION_MODEL = 'gpt-realtime-whisper';
+const WS_URL = `wss://api.openai.com/v1/realtime/translations?model=${MODEL}`;
+const OPENAI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
+  24_000,
+  LIVE_EDGE_MAX_QUEUE_SECONDS,
+  512_000,
+);
+const PENDING_AUDIO_CHUNK_LIMIT = pendingAudioChunkLimit(LIVE_EDGE_MAX_QUEUE_SECONDS);
+
+/** Convert one little-endian PCM16 chunk from Glotta's 16 kHz input to 24 kHz. */
+export function resamplePcm16Base64(base64Chunk, inputRate = 16_000, outputRate = 24_000) {
+  const input = Buffer.from(base64Chunk, 'base64');
+  const inputSamples = Math.floor(input.length / 2);
+  if (inputSamples === 0) return '';
+
+  const outputSamples = Math.round(inputSamples * outputRate / inputRate);
+  const output = Buffer.allocUnsafe(outputSamples * 2);
+  for (let index = 0; index < outputSamples; index += 1) {
+    const sourcePosition = index * inputRate / outputRate;
+    const leftIndex = Math.min(Math.floor(sourcePosition), inputSamples - 1);
+    const rightIndex = Math.min(leftIndex + 1, inputSamples - 1);
+    const fraction = sourcePosition - leftIndex;
+    const left = input.readInt16LE(leftIndex * 2);
+    const right = input.readInt16LE(rightIndex * 2);
+    const sample = Math.max(
+      -32_768,
+      Math.min(32_767, Math.round(left + ((right - left) * fraction))),
+    );
+    output.writeInt16LE(sample, index * 2);
+  }
+  return output.toString('base64');
+}
+
+export function openAISessionUpdate(targetLanguage, { inputAudioTranscription = true } = {}) {
+  return {
+    type: 'session.update',
+    session: {
+      audio: {
+        ...(inputAudioTranscription
+          ? { input: { transcription: { model: TRANSCRIPTION_MODEL } } }
+          : {}),
+        output: { language: targetLanguage },
+      },
+    },
+  };
+}
+
+/**
+ * One server-side OpenAI Realtime Translation session for one target language.
+ * Glotta supplies 16 kHz PCM16; OpenAI receives and returns 24 kHz PCM16.
+ */
+export class OpenAITranslator {
+  constructor({
+    apiKey,
+    targetLanguage,
+    onAudio,
+    onTranscript,
+    onError,
+    onStatus,
+    sessionId = 'unknown',
+    streamKind = 'listener',
+    inputAudioTranscription = true,
+  }) {
+    this.apiKey = apiKey;
+    this.targetLanguage = targetLanguage;
+    this.onAudio = onAudio;
+    this.onTranscript = onTranscript;
+    this.onError = onError;
+    this.onStatus = onStatus;
+    this.sessionId = sessionId;
+    this.streamKind = streamKind;
+    this.inputAudioTranscription = inputAudioTranscription;
+    this.ws = null;
+    this.ready = false;
+    this.closedByUs = false;
+    this.connecting = null;
+    this.reconnectAttempts = 0;
+    this.pendingAudio = [];
+    this.connectionNumber = 0;
+    this.reconnectStartedAt = null;
+    this.firstInputAt = null;
+    this.firstOutputObserved = false;
+    this.droppedBufferedChunks = 0;
+    this.droppedPendingChunks = 0;
+    this.lastDropMetricAt = 0;
+  }
+
+  connect() {
+    if (this.connecting) return this.connecting;
+    this.connecting = new Promise((resolve, reject) => {
+      const ws = new WebSocket(WS_URL, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+      });
+      this.ws = ws;
+      let settled = false;
+
+      ws.on('open', () => {
+        ws.send(JSON.stringify(openAISessionUpdate(this.targetLanguage, {
+          inputAudioTranscription: this.inputAudioTranscription,
+        })));
+      });
+
+      ws.on('message', (raw) => {
+        const event = this.#parse(raw);
+        if (!event) return;
+
+        if (event.type === 'session.updated') {
+          this.ready = true;
+          this.reconnectAttempts = 0;
+          this.connectionNumber += 1;
+          logAudioMetric({
+            event: 'openai-setup',
+            sessionId: this.sessionId,
+            stream: this.streamKind,
+            provider: 'openai',
+            language: this.targetLanguage,
+            connection: this.connectionNumber,
+            reconnectMs: this.reconnectStartedAt === null
+              ? 0
+              : Date.now() - this.reconnectStartedAt,
+            pendingChunks: this.pendingAudio.length,
+            queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+          });
+          this.reconnectStartedAt = null;
+          this.firstInputAt = null;
+          this.firstOutputObserved = false;
+          this.onStatus?.('translator-online');
+          this.#flushPendingAudio();
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+          return;
+        }
+
+        if (event.type === 'session.output_audio.delta' && typeof event.delta === 'string') {
+          if (!this.firstOutputObserved && this.firstInputAt !== null) {
+            this.firstOutputObserved = true;
+            logAudioMetric({
+              event: 'openai-first-output',
+              sessionId: this.sessionId,
+              stream: this.streamKind,
+              provider: 'openai',
+              language: this.targetLanguage,
+              connection: this.connectionNumber,
+              firstOutputMs: Date.now() - this.firstInputAt,
+            });
+          }
+          this.onAudio?.(event.delta);
+          return;
+        }
+
+        if (event.type === 'session.output_transcript.delta' && typeof event.delta === 'string') {
+          this.onTranscript?.('output', event.delta);
+          return;
+        }
+
+        if (event.type === 'session.input_transcript.delta' && typeof event.delta === 'string') {
+          this.onTranscript?.('input', event.delta);
+          return;
+        }
+
+        if (event.type === 'error') {
+          const err = new Error(event.error?.message || 'OpenAI translation session error');
+          console.error(`[openai:${this.targetLanguage}] session error:`, err.message);
+          this.onError?.(err);
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+          try { ws.close(); } catch { /* already closing */ }
+        }
+      });
+
+      ws.on('error', (error) => {
+        const err = error instanceof Error ? error : new Error(String(error?.message ?? error));
+        console.error(`[openai:${this.targetLanguage}] ws error:`, err.message);
+        this.onError?.(err);
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
+      });
+
+      ws.on('close', (code, reasonBuffer) => {
+        const reason = reasonBuffer?.toString?.() || '';
+        if (!this.closedByUs) {
+          logAudioMetric({
+            event: 'openai-unexpected-close',
+            sessionId: this.sessionId,
+            stream: this.streamKind,
+            provider: 'openai',
+            language: this.targetLanguage,
+            connection: this.connectionNumber,
+            code,
+            reason,
+          });
+        }
+        this.ready = false;
+        this.ws = null;
+        if (!settled) {
+          settled = true;
+          reject(new Error(`closed before setup (${code} ${reason})`));
+        }
+        if (!this.closedByUs) {
+          this.reconnectStartedAt = Date.now();
+          this.onStatus?.('translator-reconnecting');
+          this.#scheduleReconnect();
+        }
+      });
+    });
+
+    this.connecting.then(
+      () => { this.connecting = null; },
+      () => { this.connecting = null; },
+    );
+    return this.connecting;
+  }
+
+  #parse(raw) {
+    try {
+      const text = typeof raw === 'string'
+        ? raw
+        : Buffer.isBuffer(raw)
+          ? raw.toString('utf8')
+          : raw.toString();
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+
+  #scheduleReconnect() {
+    if (this.closedByUs) return;
+    this.reconnectAttempts += 1;
+    if (this.reconnectAttempts > 5) {
+      this.onError?.(new Error(`Translation for ${this.targetLanguage} could not be re-established`));
+      return;
+    }
+    const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 10_000);
+    setTimeout(() => {
+      if (this.closedByUs) return;
+      this.connect().catch((err) => {
+        console.error(`[openai:${this.targetLanguage}] reconnect failed:`, err.message);
+      });
+    }, delay);
+  }
+
+  #queueAudio(base64Chunk) {
+    if (this.closedByUs) return;
+    this.pendingAudio.push(base64Chunk);
+    if (this.pendingAudio.length > PENDING_AUDIO_CHUNK_LIMIT) {
+      this.pendingAudio.shift();
+      this.droppedPendingChunks += 1;
+      this.#logDropMetric('openai-pending', this.pendingAudio.length * 100);
+    }
+  }
+
+  #flushPendingAudio() {
+    const chunks = this.pendingAudio.splice(0);
+    for (const chunk of chunks) this.sendAudio(chunk);
+  }
+
+  /** @param {string} base64Chunk raw PCM 16-bit / 16 kHz / mono, base64-encoded */
+  sendAudio(base64Chunk) {
+    if (!this.ready || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.#queueAudio(base64Chunk);
+      return;
+    }
+    if (this.ws.bufferedAmount > OPENAI_AUDIO_BUFFER_LIMIT_BYTES) {
+      this.droppedBufferedChunks += 1;
+      this.#logDropMetric(
+        'openai-websocket',
+        estimateQueuedAudioMs(this.ws.bufferedAmount, 24_000),
+        this.ws.bufferedAmount,
+      );
+      return;
+    }
+    try {
+      const audio = resamplePcm16Base64(base64Chunk);
+      if (!audio) return;
+      if (this.firstInputAt === null) this.firstInputAt = Date.now();
+      this.ws.send(JSON.stringify({
+        type: 'session.input_audio_buffer.append',
+        audio,
+      }));
+    } catch (err) {
+      console.error(`[openai:${this.targetLanguage}] send failed:`, err.message);
+      this.#queueAudio(base64Chunk);
+    }
+  }
+
+  #logDropMetric(stage, queuedMs, bufferedBytes = 0) {
+    const now = Date.now();
+    if (now - this.lastDropMetricAt < ANOMALY_METRIC_LOG_INTERVAL_MS) return;
+    this.lastDropMetricAt = now;
+    logAudioMetric({
+      event: 'audio-dropped',
+      sessionId: this.sessionId,
+      stream: this.streamKind,
+      provider: 'openai',
+      language: this.targetLanguage,
+      stage,
+      queuedMs,
+      bufferedBytes,
+      droppedBufferedChunks: this.droppedBufferedChunks,
+      droppedPendingChunks: this.droppedPendingChunks,
+      queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
+    });
+  }
+
+  close() {
+    this.closedByUs = true;
+    this.ready = false;
+    try {
+      this.ws?.close();
+    } catch {
+      // already closed
+    }
+    this.ws = null;
+    this.pendingAudio = [];
+  }
+}

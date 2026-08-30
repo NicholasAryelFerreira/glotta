@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  normalizeApiTier,
+  normalizeProvider,
   SESSION_MAX_DURATION_MINUTES,
   SessionManager,
 } from '../src/sessionManager.js';
@@ -82,28 +82,25 @@ test('only one device can claim a session audio input at a time', () => {
 });
 
 
-test('sessions preserve the UI tier but temporarily route both choices to the paid Gemini key', () => {
+test('sessions default to paid Gemini and preserve an explicit OpenAI provider', () => {
   const manager = new SessionManager({
-    free: 'free-test-key',
-    paid: 'paid-test-key',
+    gemini: 'paid-gemini-test-key',
+    openai: 'openai-test-key',
   });
-  const defaultSession = manager.create({ id: 'FREE01' });
-  const paidSession = manager.create({ id: 'PAID01', apiTier: 'paid' });
-  const unexpectedSession = manager.create({ id: 'SAFE01', apiTier: 'PAID' });
+  const defaultSession = manager.create({ id: 'GEMINI' });
+  const openaiSession = manager.create({ id: 'OPENAI', provider: 'openai' });
+  const unexpectedSession = manager.create({ id: 'SAFE01', provider: 'OPENAI' });
 
   try {
-    assert.equal(defaultSession.apiTier, 'free');
-    assert.equal(defaultSession.billingApiTier, 'paid');
-    assert.equal(defaultSession.apiKey, 'paid-test-key');
-    assert.equal(paidSession.apiTier, 'paid');
-    assert.equal(paidSession.billingApiTier, 'paid');
-    assert.equal(paidSession.apiKey, 'paid-test-key');
-    assert.equal(unexpectedSession.apiTier, 'free');
-    assert.equal(unexpectedSession.apiKey, 'paid-test-key');
-    assert.equal(normalizeApiTier(undefined), 'free');
+    assert.equal(defaultSession.provider, 'gemini');
+    assert.equal(openaiSession.provider, 'openai');
+    assert.equal(unexpectedSession.provider, 'gemini');
+    assert.equal(manager.apiKeyForProvider('gemini'), 'paid-gemini-test-key');
+    assert.equal(manager.apiKeyForProvider('openai'), 'openai-test-key');
+    assert.equal(normalizeProvider(undefined), 'gemini');
   } finally {
     defaultSession.end('test complete');
-    paidSession.end('test complete');
+    openaiSession.end('test complete');
     unexpectedSession.end('test complete');
   }
 });
@@ -122,7 +119,7 @@ test('sessions echo same-language output by default and allow an explicit opt-ou
   }
 });
 
-test('empty lingering language channels stop receiving paid audio without stopping speaker transcription', () => {
+test('empty lingering language channels stop receiving provider audio without stopping speaker transcription', () => {
   const manager = new SessionManager('test-key');
   const session = manager.create({ id: 'LINGER' });
   let speakerAudioChunks = 0;
@@ -179,7 +176,7 @@ test('audio telemetry logs counts without audio or transcript content', (context
   const metrics = lines.filter((line) => line.startsWith('[audio-metrics]'));
   assert.equal(metrics.length, 2);
   assert.match(metrics[0], /"event":"speaker-client"/);
-  assert.match(metrics[0], /"apiTier":"free"/);
+  assert.match(metrics[0], /"provider":"gemini"/);
   assert.match(metrics[0], /"droppedChunks":10/);
   assert.match(metrics[1], /"event":"listener-player"/);
   assert.doesNotMatch(metrics.join('\n'), /data|transcript/i);

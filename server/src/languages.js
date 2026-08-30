@@ -1,6 +1,6 @@
-// Languages supported by gemini-3.5-live-translate-preview (BCP-47 codes).
+// Target languages supported by gemini-3.5-live-translate-preview (BCP-47 codes).
 // `name` is the English name, `native` is the language's own name (shown on the join page).
-export const LANGUAGES = [
+export const GEMINI_LANGUAGES = [
   { code: 'af', name: 'Afrikaans', native: 'Afrikaans' },
   { code: 'ak', name: 'Akan', native: 'Akan' },
   { code: 'sq', name: 'Albanian', native: 'Shqip' },
@@ -81,8 +81,34 @@ export const LANGUAGES = [
   { code: 'zu', name: 'Zulu', native: 'isiZulu' },
 ];
 
-const codes = new Set(LANGUAGES.map((l) => l.code));
+// gpt-realtime-translate detects 70+ source languages, but OpenAI currently
+// documents only these 13 target output languages. Keep this list separate so
+// listeners never select a language that the chosen provider cannot produce.
+export const OPENAI_LANGUAGES = [
+  { code: 'zh', name: 'Chinese', native: '中文' },
+  { code: 'en', name: 'English', native: 'English' },
+  { code: 'fr', name: 'French', native: 'Français' },
+  { code: 'de', name: 'German', native: 'Deutsch' },
+  { code: 'hi', name: 'Hindi', native: 'हिन्दी' },
+  { code: 'id', name: 'Indonesian', native: 'Bahasa Indonesia' },
+  { code: 'it', name: 'Italian', native: 'Italiano' },
+  { code: 'ja', name: 'Japanese', native: '日本語' },
+  { code: 'ko', name: 'Korean', native: '한국어' },
+  { code: 'pt', name: 'Portuguese', native: 'Português' },
+  { code: 'ru', name: 'Russian', native: 'Русский' },
+  { code: 'es', name: 'Spanish', native: 'Español' },
+  { code: 'vi', name: 'Vietnamese', native: 'Tiếng Việt' },
+];
 
-export function isSupportedLanguage(code) {
-  return codes.has(code);
+const languageSets = {
+  gemini: new Set(GEMINI_LANGUAGES.map((language) => language.code)),
+  openai: new Set(OPENAI_LANGUAGES.map((language) => language.code)),
+};
+
+export function languagesForProvider(provider) {
+  return provider === 'openai' ? OPENAI_LANGUAGES : GEMINI_LANGUAGES;
+}
+
+export function isSupportedLanguage(code, provider = 'gemini') {
+  return languageSets[provider]?.has(code) ?? false;
 }

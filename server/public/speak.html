@@ -171,7 +171,7 @@ const publicConfigReady = Promise.race([
 let pageActive = true;
 
 const TITLE_KEY = 'glotta.title.' + sessionId;
-const API_TIER_KEY = 'glotta.apiTier.' + sessionId;
+const PROVIDER_KEY = 'glotta.provider.' + sessionId;
 
 // Recreate this exact session if the server has lost it. Render's free tier
 // wipes in-memory sessions on restart/spin-down; since the speaker owns the
@@ -180,12 +180,12 @@ const API_TIER_KEY = 'glotta.apiTier.' + sessionId;
 async function reviveSession() {
   const password = localStorage.getItem('glotta.pwd') || '';
   const title = localStorage.getItem(TITLE_KEY) || '';
-  const apiTier = localStorage.getItem(API_TIER_KEY) === 'paid' ? 'paid' : 'free';
+  const provider = localStorage.getItem(PROVIDER_KEY) === 'openai' ? 'openai' : 'gemini';
   try {
     const r = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, password, title, apiTier }),
+      body: JSON.stringify({ sessionId, password, title, provider }),
     });
     return r.ok;
   } catch { return false; }
@@ -208,7 +208,7 @@ async function loadSession() {
   if (d && d.title) {
     document.getElementById('title').textContent = d.title;
     localStorage.setItem(TITLE_KEY, d.title); // remembered so revival can restore it
-    localStorage.setItem(API_TIER_KEY, d.apiTier === 'paid' ? 'paid' : 'free');
+    localStorage.setItem(PROVIDER_KEY, d.provider === 'openai' ? 'openai' : 'gemini');
   }
   // Load the QR only once we know the session exists, so a dead session shows
   // the message instead of a broken image.

@@ -1,7 +1,7 @@
 {
   "name": "glotta-server",
   "version": "0.1.0",
-  "description": "Relay server for Glotta live sermon translation (Gemini Live Translate)",
+  "description": "Relay server for Glotta live sermon translation",
   "type": "module",
   "main": "src/index.js",
   "engines": {

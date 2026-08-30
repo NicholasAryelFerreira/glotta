@@ -101,8 +101,8 @@ export class Translator {
    * @param {(state: 'translator-online'|'translator-reconnecting') => void} [opts.onStatus]
    * @param {string} [opts.sessionId]
    * @param {string} [opts.streamKind]
-   * @param {'free'|'paid'} [opts.apiTier]
-   * @param {'free'|'paid'} [opts.billingApiTier]
+   * @param {string} [opts.provider]
+   * @param {'paid'} [opts.billingApiTier]
    * @param {boolean} [opts.inputAudioTranscription]
    * @param {boolean} [opts.outputAudioTranscription]
    */
@@ -116,8 +116,8 @@ export class Translator {
     onStatus,
     sessionId = 'unknown',
     streamKind = 'listener',
-    apiTier = 'free',
-    billingApiTier = apiTier,
+    provider = 'gemini',
+    billingApiTier = 'paid',
     inputAudioTranscription = true,
     outputAudioTranscription = true,
   }) {
@@ -130,7 +130,7 @@ export class Translator {
     this.onStatus = onStatus;
     this.sessionId = sessionId;
     this.streamKind = streamKind;
-    this.apiTier = apiTier;
+    this.provider = provider;
     this.billingApiTier = billingApiTier;
     this.inputAudioTranscription = inputAudioTranscription;
     this.outputAudioTranscription = outputAudioTranscription;
@@ -178,7 +178,7 @@ export class Translator {
             event: 'gemini-setup',
             sessionId: this.sessionId,
             stream: this.streamKind,
-            apiTier: this.apiTier,
+            provider: this.provider,
             language: this.targetLanguage,
             connection: this.connectionNumber,
             resumed: Boolean(this.resumptionHandle),
@@ -223,7 +223,7 @@ export class Translator {
             event: 'gemini-unexpected-close',
             sessionId: this.sessionId,
             stream: this.streamKind,
-            apiTier: this.apiTier,
+            provider: this.provider,
             language: this.targetLanguage,
             connection: this.connectionNumber,
             code,
@@ -289,7 +289,7 @@ export class Translator {
         event: 'gemini-goaway',
         sessionId: this.sessionId,
         stream: this.streamKind,
-        apiTier: this.apiTier,
+        provider: this.provider,
         language: this.targetLanguage,
         connection: this.connectionNumber,
         timeLeft,
@@ -319,7 +319,7 @@ export class Translator {
       ts: new Date().toISOString(),
       sessionId: this.sessionId,
       stream: this.streamKind,
-      selectedApiTier: this.apiTier,
+      provider: this.provider,
       billingApiTier: this.billingApiTier,
       language: this.targetLanguage,
       connection: this.connectionNumber,
@@ -353,7 +353,7 @@ export class Translator {
             event: 'gemini-first-output',
             sessionId: this.sessionId,
             stream: this.streamKind,
-            apiTier: this.apiTier,
+            provider: this.provider,
             language: this.targetLanguage,
             connection: this.connectionNumber,
             firstOutputMs: Date.now() - this.firstInputAt,
@@ -434,7 +434,7 @@ export class Translator {
       event: 'audio-dropped',
       sessionId: this.sessionId,
       stream: this.streamKind,
-      apiTier: this.apiTier,
+      provider: this.provider,
       language: this.targetLanguage,
       stage,
       queuedMs,

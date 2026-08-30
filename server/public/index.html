@@ -48,20 +48,20 @@
         </span>
       </button>
       <fieldset class="tier-picker">
-        <legend>Session type</legend>
+        <legend>Translation provider</legend>
         <div class="tier-toggle">
-          <input type="radio" name="apiTier" id="tierFree" value="free" checked>
-          <label for="tierFree">Free</label>
-          <input type="radio" name="apiTier" id="tierPaid" value="paid">
-          <label for="tierPaid">Paid</label>
+          <input type="radio" name="provider" id="providerGemini" value="gemini" checked>
+          <label for="providerGemini">Google Gemini</label>
+          <input type="radio" name="provider" id="providerOpenAI" value="openai">
+          <label for="providerOpenAI">OpenAI GPT</label>
         </div>
-        <p class="tier-note" id="tierNote" aria-live="polite"></p>
+        <p class="tier-note" id="providerNote" aria-live="polite"></p>
       </fieldset>
       <p class="hint" style="margin:16px auto 2px">You are the speaker. Listeners join by scanning a QR code on the next screen — no app to install.
         The weekly session always uses the same code, link and QR — safe to print and reuse every Sunday.</p>
     </div>
 
-    <p class="footer-note">70+ languages</p>
+    <p class="footer-note">Live translated audio and captions</p>
     <div class="spacer"></div>
   </div>
 
@@ -70,24 +70,34 @@ const startBtn = document.getElementById('start');
 const weeklyBtn = document.getElementById('weekly');
 const errEl = document.getElementById('err');
 const pwdEl = document.getElementById('pwd');
-const tierInputs = [...document.querySelectorAll('input[name="apiTier"]')];
-const tierNote = document.getElementById('tierNote');
+const providerInputs = [...document.querySelectorAll('input[name="provider"]')];
+const providerNote = document.getElementById('providerNote');
 const PWD_KEY = 'glotta.pwd';
-const TIER_NOTES = {
-  free: 'Data transmitted will be used to improve Google products. Use this option only with content that is not confidential.',
-  paid: 'Please use this option with discretion because it charges the app administrator. It is appropriate for sensitive or confidential content, and the data is not stored.',
+const PROVIDER_NOTES = {
+  gemini: 'Default. Uses the paid Google Gemini service and offers translated audio and captions in 70+ target languages.',
+  openai: 'Uses gpt-realtime-translate. It detects 70+ spoken input languages and translates into 13 target languages.',
 };
+let providerAvailability = { gemini: true, openai: true };
 
-function selectedApiTier() {
-  return tierInputs.find((input) => input.checked)?.value === 'paid' ? 'paid' : 'free';
+function selectedProvider() {
+  return providerInputs.find((input) => input.checked)?.value === 'openai' ? 'openai' : 'gemini';
 }
 
-function updateTierNote() {
-  tierNote.textContent = TIER_NOTES[selectedApiTier()];
+function updateProviderNote() {
+  const provider = selectedProvider();
+  providerNote.textContent = providerAvailability[provider] === false
+    ? PROVIDER_NOTES[provider] + ' This provider is not configured on the server.'
+    : PROVIDER_NOTES[provider];
 }
 
-tierInputs.forEach((input) => input.addEventListener('change', updateTierNote));
-updateTierNote();
+function setProviderInputsDisabled(busy) {
+  providerInputs.forEach((input) => {
+    input.disabled = busy || providerAvailability[input.value] === false;
+  });
+}
+
+providerInputs.forEach((input) => input.addEventListener('change', updateProviderNote));
+updateProviderNote();
 
 // Remember the passcode on this device so the church only types it once.
 pwdEl.value = localStorage.getItem(PWD_KEY) || '';
@@ -99,6 +109,12 @@ fetch('/api/config')
   .then((r) => r.json())
   .then((d) => {
     weeklySessionId = d.weeklySessionId;
+    if (d.providers) providerAvailability = d.providers;
+    if (providerAvailability[selectedProvider()] === false) {
+      document.getElementById('providerGemini').checked = true;
+    }
+    setProviderInputsDisabled(false);
+    updateProviderNote();
     weeklyBtn.disabled = false;
   })
   .catch(() => { weeklyBtn.style.display = 'none'; });
@@ -108,28 +124,28 @@ fetch('/api/config')
 window.addEventListener('pageshow', () => {
   startBtn.disabled = false;
   weeklyBtn.disabled = !weeklySessionId;
-  tierInputs.forEach((input) => { input.disabled = false; });
+  setProviderInputsDisabled(false);
 });
 
 async function startSession(sessionId) {
   const password = pwdEl.value;
-  const apiTier = selectedApiTier();
+  const provider = selectedProvider();
   startBtn.disabled = true;
   weeklyBtn.disabled = true;
-  tierInputs.forEach((input) => { input.disabled = true; });
+  setProviderInputsDisabled(true);
   errEl.textContent = '';
   try {
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password, sessionId, apiTier }),
+      body: JSON.stringify({ password, sessionId, provider }),
     });
     if (res.status === 401) {
       errEl.textContent = 'Incorrect password.';
       localStorage.removeItem(PWD_KEY);
       startBtn.disabled = false;
       weeklyBtn.disabled = !weeklySessionId;
-      tierInputs.forEach((input) => { input.disabled = false; });
+      setProviderInputsDisabled(false);
       return;
     }
     if (!res.ok) {
@@ -139,13 +155,13 @@ async function startSession(sessionId) {
     const data = await res.json();
     localStorage.setItem(PWD_KEY, password); // worked — remember it
     localStorage.setItem('glotta.title.' + data.sessionId, data.title);
-    localStorage.setItem('glotta.apiTier.' + data.sessionId, data.apiTier || apiTier);
+    localStorage.setItem('glotta.provider.' + data.sessionId, data.provider || provider);
     location.href = '/speak/' + data.sessionId;
   } catch (e) {
     errEl.textContent = e.message || 'Could not start a session. Please try again.';
     startBtn.disabled = false;
     weeklyBtn.disabled = !weeklySessionId;
-    tierInputs.forEach((input) => { input.disabled = false; });
+    setProviderInputsDisabled(false);
   }
 }
 

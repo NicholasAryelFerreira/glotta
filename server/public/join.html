@@ -121,15 +121,49 @@ function setStatus(kind, text) {
 const SESSION_POLL_MS = 5000;
 const waitNote = document.getElementById('waitNote');
 let sessionReady = false;
+let loadedProvider = null;
+
+async function loadLanguages(provider) {
+  if (loadedProvider === provider) return;
+  const langRes = await fetch(`/api/languages?provider=${encodeURIComponent(provider)}`);
+  if (!langRes.ok) throw new Error('Could not load languages');
+  const { languages } = await langRes.json();
+  const saved = localStorage.getItem(LANG_KEY);
+  langSel.innerHTML = '<option value="">Choose your language…</option>';
+  languages.sort((a, b) => a.name.localeCompare(b.name));
+  for (const language of languages) {
+    const option = document.createElement('option');
+    option.value = language.code;
+    option.textContent = language.native === language.name
+      ? language.name
+      : `${language.name} (${language.native})`;
+    langSel.appendChild(option);
+  }
+  if (saved && [...langSel.options].some((option) => option.value === saved)) {
+    langSel.value = saved;
+  }
+  loadedProvider = provider;
+}
 
 async function checkSession() {
   let res = null;
   try { res = await fetch(`/api/sessions/${sessionId}`); } catch { /* offline — retry below */ }
   if (res && res.ok) {
     const sess = await res.json();
+    try {
+      await loadLanguages(sess.provider || 'gemini');
+    } catch {
+      sessionReady = false;
+      langSel.disabled = true;
+      setStatus('offline', 'Loading available languages…');
+      setTimeout(checkSession, SESSION_POLL_MS);
+      return;
+    }
     sessionReady = true;
+    langSel.disabled = false;
     document.getElementById('title').textContent = sess.title;
-    document.getElementById('sessionInfo').textContent = `Session ${sess.sessionId}`;
+    const providerName = sess.provider === 'openai' ? 'OpenAI GPT' : 'Google Gemini';
+    document.getElementById('sessionInfo').textContent = `Session ${sess.sessionId} · ${providerName}`;
     waitNote.style.display = 'none';
     setStatus('hidden');
     toggleBtn.disabled = !langSel.value;
@@ -146,17 +180,7 @@ async function checkSession() {
 }
 
 async function init() {
-  const langRes = await fetch('/api/languages');
-  const { languages } = await langRes.json();
-  languages.sort((a, b) => a.name.localeCompare(b.name));
-  for (const l of languages) {
-    const opt = document.createElement('option');
-    opt.value = l.code;
-    opt.textContent = l.native === l.name ? l.name : `${l.name} (${l.native})`;
-    langSel.appendChild(opt);
-  }
-  const saved = localStorage.getItem(LANG_KEY);
-  if (saved && [...langSel.options].some(o => o.value === saved)) langSel.value = saved;
+  langSel.disabled = true;
   await checkSession();
 }
 langSel.onchange = () => { toggleBtn.disabled = !langSel.value || !sessionReady; };

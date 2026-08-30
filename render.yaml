@@ -2,7 +2,7 @@
 # Render reads this automatically when you create a Blueprint from the repo.
 #
 # The service `name` is "glotta", so the public URL is glotta.onrender.com.
-# Create a new Blueprint from this repo, set both Gemini API keys when prompted, and
+# Create a new Blueprint from this repo, set the provider API keys when prompted, and
 # (once it is Live) delete the old "glossolalia" service in the dashboard.
 services:
   - type: web
@@ -14,7 +14,7 @@ services:
     startCommand: npm start
     envVars:
       # Set the actual value in the Render dashboard (kept secret, not in git).
-      - key: GEMINI_API_KEY_FREE
-        sync: false
       - key: GEMINI_API_KEY_PAID
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false

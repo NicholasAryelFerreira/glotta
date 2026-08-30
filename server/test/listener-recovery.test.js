@@ -11,6 +11,11 @@ test('listener page inline script remains valid JavaScript', () => {
   assert.doesNotThrow(() => new vm.Script(inlineScript));
 });
 
+test('listener loads only the selected provider target languages', () => {
+  assert.match(joinHtml, /api\/languages\?provider=/);
+  assert.match(joinHtml, /sess\.provider \|\| 'gemini'/);
+});
+
 test('audio recovery is bounded and replaces a stale listener socket', () => {
   assert.match(joinHtml, /const AUDIO_SETUP_TIMEOUT_MS = 5_000;/);
   assert.match(joinHtml, /async function resumeListening\(\)[\s\S]*?replaceListenerSocket\(\);/);
