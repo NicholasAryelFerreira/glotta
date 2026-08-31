@@ -188,7 +188,7 @@ test('speaker transcript recovery logs timing without transcript content', (cont
   context.mock.method(console, 'log', (...args) => { lines.push(args.join(' ')); });
   const manager = new SessionManager({ gemini: 'gemini-test-key', openai: 'openai-test-key' });
   let translatorOptions = null;
-  manager.createTranslator = (_provider, options) => {
+  manager.createTranscriptStream = (_provider, options) => {
     translatorOptions = options;
     return {
       ready: true,
@@ -197,6 +197,7 @@ test('speaker transcript recovery logs timing without transcript content', (cont
       close() {},
     };
   };
+  manager.createTranslator = manager.createTranscriptStream;
   const session = manager.create({ id: 'RECOVR', provider: 'openai' });
   lines.length = 0;
 

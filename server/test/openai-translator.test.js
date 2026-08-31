@@ -7,12 +7,31 @@ import {
   resamplePcm16Base64,
 } from '../src/openaiTranslator.js';
 
-test('OpenAI session selects the target language without a separate transcription model', () => {
+test('OpenAI translation session selects the target language', () => {
   assert.deepEqual(openAISessionUpdate('pt'), {
     type: 'session.update',
     session: {
       audio: {
         output: { language: 'pt' },
+      },
+    },
+  });
+});
+
+test('OpenAI speaker transcript session uses gpt-live-transcribe with live English deltas', () => {
+  assert.deepEqual(openAISessionUpdate('en', 'transcription'), {
+    type: 'session.update',
+    session: {
+      type: 'transcription',
+      audio: {
+        input: {
+          format: { type: 'audio/pcm', rate: 24_000 },
+          transcription: {
+            model: 'gpt-live-transcribe',
+            languages: ['en'],
+            delay: 'low',
+          },
+        },
       },
     },
   });

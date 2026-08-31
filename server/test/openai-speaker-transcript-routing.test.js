@@ -12,13 +12,13 @@ function fakeSocket() {
   };
 }
 
-test('OpenAI mirrors source transcript from an active listener translation stream', async (context) => {
+test('OpenAI keeps a dedicated transcription stream for speaker captions', async (context) => {
   const manager = new SessionManager({
     gemini: 'gemini-test-key',
     openai: 'openai-test-key',
   });
   const translators = [];
-  manager.createTranslator = (_provider, options) => {
+  const makeFakeStream = (_provider, options) => {
     const translator = {
       options,
       ready: true,
@@ -35,6 +35,8 @@ test('OpenAI mirrors source transcript from an active listener translation strea
     translators.push(translator);
     return translator;
   };
+  manager.createTranslator = makeFakeStream;
+  manager.createTranscriptStream = makeFakeStream;
 
   const session = manager.create({ id: 'ROUTE1', provider: 'openai' });
   context.after(async () => {
@@ -47,14 +49,15 @@ test('OpenAI mirrors source transcript from an active listener translation strea
 
   session.pushAudio('before-listener');
   const dedicated = translators.find(({ options }) => options.streamKind === 'speaker-transcript');
+  assert.equal(dedicated.options.streamMode, 'transcription');
   assert.deepEqual(dedicated.sentAudio, ['before-listener']);
 
   await session.addListener(listener, 'pt');
   const portuguese = translators.find(({ options }) => (
     options.streamKind === 'listener' && options.targetLanguage === 'pt'
   ));
-  assert.equal(dedicated.closed, true);
-  assert.equal(session.speakerTranscriptTranslator, null);
+  assert.equal(dedicated.closed, false);
+  assert.equal(session.speakerTranscriptTranslator, dedicated);
 
   session.pushAudio('with-listener');
   assert.deepEqual(portuguese.sentAudio, ['with-listener']);
@@ -63,7 +66,7 @@ test('OpenAI mirrors source transcript from an active listener translation strea
     1,
   );
 
-  portuguese.options.onTranscript('input', 'English source words');
+  dedicated.options.onTranscript('input', 'English source words');
   assert.deepEqual(
     speaker.sent.filter(({ type }) => type === 'transcript'),
     [{ type: 'transcript', kind: 'input', text: 'English source words' }],
@@ -74,8 +77,19 @@ test('OpenAI mirrors source transcript from an active listener translation strea
   const dedicatedStreams = translators.filter(({ options }) => (
     options.streamKind === 'speaker-transcript'
   ));
-  assert.equal(dedicatedStreams.length, 2);
-  assert.deepEqual(dedicatedStreams[1].sentAudio, ['after-listener']);
+  assert.equal(dedicatedStreams.length, 1);
+  assert.deepEqual(dedicatedStreams[0].sentAudio, [
+    'before-listener',
+    'with-listener',
+    'after-listener',
+  ]);
+
+  // Listener translation streams do not own the speaker caption path.
+  portuguese.options.onTranscript('input', 'Should not be mirrored');
+  assert.deepEqual(
+    speaker.sent.filter(({ type }) => type === 'transcript'),
+    [{ type: 'transcript', kind: 'input', text: 'English source words' }],
+  );
 
   await session.end('test complete');
 });
@@ -83,7 +97,7 @@ test('OpenAI mirrors source transcript from an active listener translation strea
 test('Gemini keeps its dedicated speaker transcript stream while listeners are active', async (context) => {
   const manager = new SessionManager('gemini-test-key');
   const translators = [];
-  manager.createTranslator = (_provider, options) => {
+  manager.createTranscriptStream = (_provider, options) => {
     const translator = {
       options,
       ready: true,
@@ -98,6 +112,7 @@ test('Gemini keeps its dedicated speaker transcript stream while listeners are a
     translators.push(translator);
     return translator;
   };
+  manager.createTranslator = manager.createTranscriptStream;
 
   const session = manager.create({ id: 'ROUTE2', provider: 'gemini' });
   context.after(async () => {

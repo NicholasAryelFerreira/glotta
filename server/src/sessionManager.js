@@ -98,9 +98,9 @@ class LanguageChannel {
           this.outputHealth.lastTranscriptAt = Date.now();
         }
         this.broadcast({ type: 'transcript', kind, text });
-        // OpenAI translation sessions already include the source transcript.
-        // Mirror one active listener stream to the speaker instead of paying
-        // for an unreliable same-language translation stream in parallel.
+        // Gemini listener streams can provide the source transcript while the
+        // dedicated stream is reconnecting. OpenAI uses a separate native
+        // transcription stream, so listener events are never mirrored.
         if (kind === 'input' && this.session.shouldMirrorSourceTranscript(this)) {
           this.session.receiveSpeakerTranscript(text);
         }
@@ -357,7 +357,7 @@ class Session {
 
   shouldMirrorSourceTranscript(channel) {
     if (this.transcriptChannel !== channel) return false;
-    if (this.provider === 'openai') return channel.listeners.size > 0;
+    if (this.provider === 'openai') return false;
     return !this.speakerTranscriptTranslator?.ready;
   }
 
@@ -383,19 +383,9 @@ class Session {
     return this.transcriptChannel;
   }
 
-  #closeDedicatedOpenAITranscript() {
-    if (this.provider !== 'openai' || !this.speakerTranscriptTranslator) return;
-    const translator = this.speakerTranscriptTranslator;
-    this.speakerTranscriptTranslator = null;
-    this.speakerTranscriptWatchdog.reset();
-    this.speakerTranscriptRestarting = false;
-    this.speakerTranscriptRecoveryStartedAt = null;
-    translator.close();
-  }
-
   ensureSpeakerTranscript() {
     if (this.speakerTranscriptTranslator) return;
-    const translator = this.manager.createTranslator(this.provider, {
+    const translator = this.manager.createTranscriptStream(this.provider, {
       targetLanguage: SPEAKER_TRANSCRIPT_LANGUAGE,
       echoTargetLanguage: false,
       onAudio: () => {},
@@ -431,20 +421,13 @@ class Session {
     if (this.ended) return;
     this.lastAudioAt = Date.now();
     this.#recordSpeakerIngress(metadata);
-    const openAIListenerTranscript = this.provider === 'openai'
-      ? this.#activeTranscriptChannel()
-      : null;
-    if (openAIListenerTranscript) {
-      this.#closeDedicatedOpenAITranscript();
-    } else {
-      this.ensureSpeakerTranscript();
-      this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
-      const stall = this.speakerTranscriptWatchdog.recordAudio({
-        speechDetected: metadata.speechDetected === true,
-        streamReady: this.speakerTranscriptTranslator?.ready === true,
-      });
-      if (stall) this.#restartStalledSpeakerTranscript(stall);
-    }
+    this.ensureSpeakerTranscript();
+    this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
+    const stall = this.speakerTranscriptWatchdog.recordAudio({
+      speechDetected: metadata.speechDetected === true,
+      streamReady: this.speakerTranscriptTranslator?.ready === true,
+    });
+    if (stall) this.#restartStalledSpeakerTranscript(stall);
     for (const channel of this.channels.values()) {
       // Keep an empty channel available briefly for a listener refresh, but do
       // not pay to feed a provider while nobody can receive that language.
@@ -612,7 +595,6 @@ class Session {
     }
     channel.addListener(ws);
     this.#activeTranscriptChannel();
-    this.#closeDedicatedOpenAITranscript();
     this.notifySpeakerStats();
     return channel;
   }
@@ -714,6 +696,25 @@ export class SessionManager {
     const normalized = normalizeProvider(provider);
     const TranslatorClass = normalized === 'openai' ? OpenAITranslator : Translator;
     return new TranslatorClass({
+      ...options,
+      apiKey: this.apiKeyForProvider(normalized),
+      provider: normalized,
+      billingApiTier: 'paid',
+    });
+  }
+
+  createTranscriptStream(provider, options) {
+    const normalized = normalizeProvider(provider);
+    if (normalized === 'openai') {
+      return new OpenAITranslator({
+        ...options,
+        streamMode: 'transcription',
+        apiKey: this.apiKeyForProvider(normalized),
+        provider: normalized,
+        billingApiTier: 'paid',
+      });
+    }
+    return new Translator({
       ...options,
       apiKey: this.apiKeyForProvider(normalized),
       provider: normalized,

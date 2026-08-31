@@ -15,8 +15,10 @@ import {
   reconnectDelayMs,
 } from './reconnectPolicy.js';
 
-const MODEL = 'gpt-realtime-translate';
-const WS_URL = `wss://api.openai.com/v1/realtime/translations?model=${MODEL}`;
+const TRANSLATION_MODEL = 'gpt-realtime-translate';
+const TRANSCRIPTION_MODEL = 'gpt-live-transcribe';
+const TRANSLATION_WS_URL = `wss://api.openai.com/v1/realtime/translations?model=${TRANSLATION_MODEL}`;
+const TRANSCRIPTION_WS_URL = `wss://api.openai.com/v1/realtime?model=${TRANSCRIPTION_MODEL}`;
 const OPENAI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
   24_000,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
@@ -49,9 +51,28 @@ export function resamplePcm16Base64(base64Chunk, inputRate = 16_000, outputRate 
   return output.toString('base64');
 }
 
-export function openAISessionUpdate(targetLanguage) {
-  // Translation sessions emit source transcript deltas themselves, so do not
-  // attach a separate transcription model to the session.
+export function openAISessionUpdate(targetLanguage, streamMode = 'translation') {
+  if (streamMode === 'transcription') {
+    return {
+      type: 'session.update',
+      session: {
+        type: 'transcription',
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: 24_000 },
+            transcription: {
+              model: TRANSCRIPTION_MODEL,
+              languages: ['en'],
+              delay: 'low',
+            },
+            // gpt-live-transcribe supports server VAD by default. Keeping it
+            // enabled lets transcript deltas arrive without explicit commits.
+          },
+        },
+      },
+    };
+  }
+
   return {
     type: 'session.update',
     session: {
@@ -76,6 +97,7 @@ export class OpenAITranslator {
     onStatus,
     sessionId = 'unknown',
     streamKind = 'listener',
+    streamMode = 'translation',
   }) {
     this.apiKey = apiKey;
     this.targetLanguage = targetLanguage;
@@ -85,6 +107,7 @@ export class OpenAITranslator {
     this.onStatus = onStatus;
     this.sessionId = sessionId;
     this.streamKind = streamKind;
+    this.streamMode = streamMode;
     this.ws = null;
     this.ready = false;
     this.closedByUs = false;
@@ -110,14 +133,17 @@ export class OpenAITranslator {
   connect() {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
-      const ws = new WebSocket(WS_URL, {
-        headers: { Authorization: `Bearer ${this.apiKey}` },
-      });
+      const ws = new WebSocket(
+        this.streamMode === 'transcription' ? TRANSCRIPTION_WS_URL : TRANSLATION_WS_URL,
+        {
+          headers: { Authorization: `Bearer ${this.apiKey}` },
+        },
+      );
       this.ws = ws;
       let settled = false;
 
       ws.on('open', () => {
-        ws.send(JSON.stringify(openAISessionUpdate(this.targetLanguage)));
+        ws.send(JSON.stringify(openAISessionUpdate(this.targetLanguage, this.streamMode)));
       });
 
       ws.on('message', (raw) => {
@@ -190,6 +216,16 @@ export class OpenAITranslator {
         }
 
         if (event.type === 'session.input_transcript.delta' && typeof event.delta === 'string') {
+          this.#recordFirstSourceTranscript();
+          this.onTranscript?.('input', event.delta);
+          return;
+        }
+
+        if (
+          this.streamMode === 'transcription'
+          && event.type === 'conversation.item.input_audio_transcription.delta'
+          && typeof event.delta === 'string'
+        ) {
           this.#recordFirstSourceTranscript();
           this.onTranscript?.('input', event.delta);
           return;
@@ -330,7 +366,9 @@ export class OpenAITranslator {
       if (!audio) return;
       if (this.firstInputAt === null) this.firstInputAt = Date.now();
       this.ws.send(JSON.stringify({
-        type: 'session.input_audio_buffer.append',
+        type: this.streamMode === 'transcription'
+          ? 'input_audio_buffer.append'
+          : 'session.input_audio_buffer.append',
         audio,
       }));
       this.#recordInputAudioUsage(base64Chunk, 16_000);
