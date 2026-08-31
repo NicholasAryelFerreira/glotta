@@ -4,6 +4,7 @@ import {
   OPENAI_GRACEFUL_CLOSE_TIMEOUT_MS,
   OpenAITranslator,
   openAISessionUpdate,
+  openAIWebSocketUrl,
   resamplePcm16Base64,
 } from '../src/openaiTranslator.js';
 
@@ -19,6 +20,10 @@ test('OpenAI translation session selects the target language', () => {
 });
 
 test('OpenAI speaker transcript session uses gpt-live-transcribe with live English deltas', () => {
+  assert.equal(
+    openAIWebSocketUrl('transcription'),
+    'wss://api.openai.com/v1/realtime?intent=transcription',
+  );
   assert.deepEqual(openAISessionUpdate('en', 'transcription'), {
     type: 'session.update',
     session: {

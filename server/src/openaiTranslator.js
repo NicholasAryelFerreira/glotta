@@ -17,11 +17,10 @@ import {
 
 const TRANSLATION_MODEL = 'gpt-realtime-translate';
 const TRANSCRIPTION_MODEL = 'gpt-live-transcribe';
-// A transcription session still needs a realtime-capable session model in the
-// WebSocket URL. The transcription model is selected inside session.update.
-const TRANSCRIPTION_SESSION_MODEL = 'gpt-realtime-2.1';
 const TRANSLATION_WS_URL = `wss://api.openai.com/v1/realtime/translations?model=${TRANSLATION_MODEL}`;
-const TRANSCRIPTION_WS_URL = `wss://api.openai.com/v1/realtime?model=${TRANSCRIPTION_SESSION_MODEL}`;
+// The intent query creates a transcription session before session.update is
+// sent. A model query would create a normal Realtime session instead.
+const TRANSCRIPTION_WS_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
 const OPENAI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
   24_000,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
@@ -29,6 +28,10 @@ const OPENAI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
 );
 const PENDING_AUDIO_CHUNK_LIMIT = pendingAudioChunkLimit(LIVE_EDGE_MAX_QUEUE_SECONDS);
 export const OPENAI_GRACEFUL_CLOSE_TIMEOUT_MS = 2_000;
+
+export function openAIWebSocketUrl(streamMode = 'translation') {
+  return streamMode === 'transcription' ? TRANSCRIPTION_WS_URL : TRANSLATION_WS_URL;
+}
 
 /** Convert one little-endian PCM16 chunk from Glotta's 16 kHz input to 24 kHz. */
 export function resamplePcm16Base64(base64Chunk, inputRate = 16_000, outputRate = 24_000) {
@@ -137,7 +140,7 @@ export class OpenAITranslator {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
       const ws = new WebSocket(
-        this.streamMode === 'transcription' ? TRANSCRIPTION_WS_URL : TRANSLATION_WS_URL,
+        openAIWebSocketUrl(this.streamMode),
         {
           headers: { Authorization: `Bearer ${this.apiKey}` },
         },
