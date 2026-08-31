@@ -98,14 +98,11 @@ class LanguageChannel {
           this.outputHealth.lastTranscriptAt = Date.now();
         }
         this.broadcast({ type: 'transcript', kind, text });
-        // Input transcript is language-independent. Use one listener channel
-        // as a fallback until the dedicated speaker transcript stream is ready.
-        if (
-          kind === 'input'
-          && !this.session.speakerTranscriptTranslator?.ready
-          && this.session.transcriptChannel === this
-        ) {
-          this.session.sendToSpeaker({ type: 'transcript', kind: 'input', text });
+        // OpenAI translation sessions already include the source transcript.
+        // Mirror one active listener stream to the speaker instead of paying
+        // for an unreliable same-language translation stream in parallel.
+        if (kind === 'input' && this.session.shouldMirrorSourceTranscript(this)) {
+          this.session.receiveSpeakerTranscript(text);
         }
       },
       onError: (err) => this.broadcast({ type: 'error', message: err.message }),
@@ -275,8 +272,8 @@ class Session {
     this.speakerWs = null;
     this.speakerGraceTimer = null;
     this.channels = new Map(); // lang -> LanguageChannel
-    this.transcriptChannel = null; // listener channel that mirrors input transcripts to the speaker as a fallback
-    this.speakerTranscriptTranslator = null; // hidden provider stream for speaker transcript even with no listeners
+    this.transcriptChannel = null; // active listener channel that can mirror source transcripts to the speaker
+    this.speakerTranscriptTranslator = null; // hidden provider stream used when listener streams cannot supply the transcript
     this.speakerTranscriptWatchdog = new TranscriptWatchdog();
     this.speakerTranscriptRestarting = false;
     this.speakerTranscriptRecoveryStartedAt = null;
@@ -358,6 +355,44 @@ class Session {
     }
   }
 
+  shouldMirrorSourceTranscript(channel) {
+    if (this.transcriptChannel !== channel) return false;
+    if (this.provider === 'openai') return channel.listeners.size > 0;
+    return !this.speakerTranscriptTranslator?.ready;
+  }
+
+  receiveSpeakerTranscript(text) {
+    if (this.speakerTranscriptRecoveryStartedAt !== null) {
+      logAudioMetric({
+        event: 'transcript-recovered',
+        sessionId: this.id,
+        stream: 'speaker-transcript',
+        provider: this.provider,
+        recoveryMs: Date.now() - this.speakerTranscriptRecoveryStartedAt,
+      });
+      this.speakerTranscriptRecoveryStartedAt = null;
+    }
+    this.speakerTranscriptWatchdog.recordTranscript();
+    this.sendToSpeaker({ type: 'transcript', kind: 'input', text });
+  }
+
+  #activeTranscriptChannel() {
+    if (this.transcriptChannel?.listeners.size > 0) return this.transcriptChannel;
+    this.transcriptChannel = [...this.channels.values()]
+      .find((channel) => channel.listeners.size > 0) ?? null;
+    return this.transcriptChannel;
+  }
+
+  #closeDedicatedOpenAITranscript() {
+    if (this.provider !== 'openai' || !this.speakerTranscriptTranslator) return;
+    const translator = this.speakerTranscriptTranslator;
+    this.speakerTranscriptTranslator = null;
+    this.speakerTranscriptWatchdog.reset();
+    this.speakerTranscriptRestarting = false;
+    this.speakerTranscriptRecoveryStartedAt = null;
+    translator.close();
+  }
+
   ensureSpeakerTranscript() {
     if (this.speakerTranscriptTranslator) return;
     const translator = this.manager.createTranslator(this.provider, {
@@ -365,19 +400,8 @@ class Session {
       echoTargetLanguage: false,
       onAudio: () => {},
       onTranscript: (kind, text) => {
-        if (kind === 'input') {
-          if (this.speakerTranscriptRecoveryStartedAt !== null) {
-            logAudioMetric({
-              event: 'transcript-recovered',
-              sessionId: this.id,
-              stream: 'speaker-transcript',
-              provider: this.provider,
-              recoveryMs: Date.now() - this.speakerTranscriptRecoveryStartedAt,
-            });
-            this.speakerTranscriptRecoveryStartedAt = null;
-          }
-          this.speakerTranscriptWatchdog.recordTranscript();
-          this.sendToSpeaker({ type: 'transcript', kind: 'input', text });
+        if (kind === 'input' && this.speakerTranscriptTranslator === translator) {
+          this.receiveSpeakerTranscript(text);
         }
       },
       onError: (err) => this.sendToSpeaker({ type: 'error', message: err.message }),
@@ -407,13 +431,20 @@ class Session {
     if (this.ended) return;
     this.lastAudioAt = Date.now();
     this.#recordSpeakerIngress(metadata);
-    this.ensureSpeakerTranscript();
-    this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
-    const stall = this.speakerTranscriptWatchdog.recordAudio({
-      speechDetected: metadata.speechDetected === true,
-      streamReady: this.speakerTranscriptTranslator?.ready === true,
-    });
-    if (stall) this.#restartStalledSpeakerTranscript(stall);
+    const openAIListenerTranscript = this.provider === 'openai'
+      ? this.#activeTranscriptChannel()
+      : null;
+    if (openAIListenerTranscript) {
+      this.#closeDedicatedOpenAITranscript();
+    } else {
+      this.ensureSpeakerTranscript();
+      this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
+      const stall = this.speakerTranscriptWatchdog.recordAudio({
+        speechDetected: metadata.speechDetected === true,
+        streamReady: this.speakerTranscriptTranslator?.ready === true,
+      });
+      if (stall) this.#restartStalledSpeakerTranscript(stall);
+    }
     for (const channel of this.channels.values()) {
       // Keep an empty channel available briefly for a listener refresh, but do
       // not pay to feed a provider while nobody can receive that language.
@@ -570,7 +601,6 @@ class Session {
     if (!channel) {
       channel = new LanguageChannel(this, lang);
       this.channels.set(lang, channel);
-      if (!this.transcriptChannel) this.transcriptChannel = channel;
       try {
         await channel.translator.connect();
       } catch (err) {
@@ -581,6 +611,8 @@ class Session {
       }
     }
     channel.addListener(ws);
+    this.#activeTranscriptChannel();
+    this.#closeDedicatedOpenAITranscript();
     this.notifySpeakerStats();
     return channel;
   }
@@ -589,6 +621,7 @@ class Session {
     const channel = this.channels.get(lang);
     if (channel) {
       channel.removeListener(ws);
+      this.#activeTranscriptChannel();
       this.notifySpeakerStats();
     }
   }
@@ -598,7 +631,8 @@ class Session {
     if (!channel) return Promise.resolve();
     this.channels.delete(lang);
     if (this.transcriptChannel === channel) {
-      this.transcriptChannel = this.channels.values().next().value ?? null;
+      this.transcriptChannel = null;
+      this.#activeTranscriptChannel();
     }
     this.notifySpeakerStats();
     return channel.close(options);

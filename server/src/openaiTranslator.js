@@ -361,8 +361,7 @@ export class OpenAITranslator {
 
   #recordFirstSourceTranscript() {
     if (
-      this.streamKind !== 'speaker-transcript'
-      || this.firstSourceTranscriptObserved
+      this.firstSourceTranscriptObserved
       || this.firstInputAt === null
     ) return;
     this.firstSourceTranscriptObserved = true;
