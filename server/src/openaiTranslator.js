@@ -17,8 +17,11 @@ import {
 
 const TRANSLATION_MODEL = 'gpt-realtime-translate';
 const TRANSCRIPTION_MODEL = 'gpt-live-transcribe';
+// A transcription session still needs a realtime-capable session model in the
+// WebSocket URL. The transcription model is selected inside session.update.
+const TRANSCRIPTION_SESSION_MODEL = 'gpt-realtime-2.1';
 const TRANSLATION_WS_URL = `wss://api.openai.com/v1/realtime/translations?model=${TRANSLATION_MODEL}`;
-const TRANSCRIPTION_WS_URL = `wss://api.openai.com/v1/realtime?model=${TRANSCRIPTION_MODEL}`;
+const TRANSCRIPTION_WS_URL = `wss://api.openai.com/v1/realtime?model=${TRANSCRIPTION_SESSION_MODEL}`;
 const OPENAI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
   24_000,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
