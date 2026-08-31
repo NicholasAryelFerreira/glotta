@@ -1,12 +1,19 @@
 import WebSocket from 'ws';
 import {
   ANOMALY_METRIC_LOG_INTERVAL_MS,
+  HEALTH_METRIC_LOG_INTERVAL_MS,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
   audioBufferLimitBytes,
   estimateQueuedAudioMs,
   logAudioMetric,
   pendingAudioChunkLimit,
+  pcm16Base64DurationMs,
 } from './liveEdge.js';
+import {
+  FAST_RECONNECT_ATTEMPTS,
+  isFirstSlowReconnect,
+  reconnectDelayMs,
+} from './reconnectPolicy.js';
 
 const MODEL = 'gpt-realtime-translate';
 const WS_URL = `wss://api.openai.com/v1/realtime/translations?model=${MODEL}`;
@@ -16,6 +23,7 @@ const OPENAI_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
   512_000,
 );
 const PENDING_AUDIO_CHUNK_LIMIT = pendingAudioChunkLimit(LIVE_EDGE_MAX_QUEUE_SECONDS);
+export const OPENAI_GRACEFUL_CLOSE_TIMEOUT_MS = 2_000;
 
 /** Convert one little-endian PCM16 chunk from Glotta's 16 kHz input to 24 kHz. */
 export function resamplePcm16Base64(base64Chunk, inputRate = 16_000, outputRate = 24_000) {
@@ -87,9 +95,16 @@ export class OpenAITranslator {
     this.reconnectStartedAt = null;
     this.firstInputAt = null;
     this.firstOutputObserved = false;
+    this.firstSourceTranscriptObserved = false;
     this.droppedBufferedChunks = 0;
     this.droppedPendingChunks = 0;
     this.lastDropMetricAt = 0;
+    this.audioUsageIntervalStartedAt = Date.now();
+    this.inputAudioMs = 0;
+    this.totalInputAudioMs = 0;
+    this.closingPromise = null;
+    this.closeResolve = null;
+    this.closeTimer = null;
   }
 
   connect() {
@@ -110,6 +125,10 @@ export class OpenAITranslator {
         if (!event) return;
 
         if (event.type === 'session.updated') {
+          const reconnectAttempts = this.reconnectAttempts;
+          const reconnectMs = this.reconnectStartedAt === null
+            ? 0
+            : Date.now() - this.reconnectStartedAt;
           this.ready = true;
           this.reconnectAttempts = 0;
           this.connectionNumber += 1;
@@ -120,15 +139,25 @@ export class OpenAITranslator {
             provider: 'openai',
             language: this.targetLanguage,
             connection: this.connectionNumber,
-            reconnectMs: this.reconnectStartedAt === null
-              ? 0
-              : Date.now() - this.reconnectStartedAt,
+            reconnectMs,
             pendingChunks: this.pendingAudio.length,
             queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
           });
+          if (reconnectAttempts > FAST_RECONNECT_ATTEMPTS) {
+            logAudioMetric({
+              event: 'provider-stream-recovered',
+              sessionId: this.sessionId,
+              stream: this.streamKind,
+              provider: 'openai',
+              language: this.targetLanguage,
+              reconnectAttempts,
+              recoveryMs: reconnectMs,
+            });
+          }
           this.reconnectStartedAt = null;
           this.firstInputAt = null;
           this.firstOutputObserved = false;
+          this.firstSourceTranscriptObserved = false;
           this.onStatus?.('translator-online');
           this.#flushPendingAudio();
           if (!settled) {
@@ -161,7 +190,14 @@ export class OpenAITranslator {
         }
 
         if (event.type === 'session.input_transcript.delta' && typeof event.delta === 'string') {
+          this.#recordFirstSourceTranscript();
           this.onTranscript?.('input', event.delta);
+          return;
+        }
+
+        if (event.type === 'session.closed') {
+          try { ws.close(); } catch { /* already closing */ }
+          this.#completeClose();
           return;
         }
 
@@ -208,10 +244,11 @@ export class OpenAITranslator {
           reject(new Error(`closed before setup (${code} ${reason})`));
         }
         if (!this.closedByUs) {
-          this.reconnectStartedAt = Date.now();
+          if (this.reconnectStartedAt === null) this.reconnectStartedAt = Date.now();
           this.onStatus?.('translator-reconnecting');
           this.#scheduleReconnect();
         }
+        if (this.closeResolve) this.#completeClose();
       });
     });
 
@@ -238,11 +275,18 @@ export class OpenAITranslator {
   #scheduleReconnect() {
     if (this.closedByUs) return;
     this.reconnectAttempts += 1;
-    if (this.reconnectAttempts > 5) {
-      this.onError?.(new Error(`Translation for ${this.targetLanguage} could not be re-established`));
-      return;
+    if (isFirstSlowReconnect(this.reconnectAttempts)) {
+      logAudioMetric({
+        event: 'provider-stream-unavailable',
+        sessionId: this.sessionId,
+        stream: this.streamKind,
+        provider: 'openai',
+        language: this.targetLanguage,
+        reconnectAttempts: this.reconnectAttempts,
+        retryEveryMs: reconnectDelayMs(this.reconnectAttempts),
+      });
     }
-    const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 10_000);
+    const delay = reconnectDelayMs(this.reconnectAttempts);
     setTimeout(() => {
       if (this.closedByUs) return;
       this.connect().catch((err) => {
@@ -289,6 +333,7 @@ export class OpenAITranslator {
         type: 'session.input_audio_buffer.append',
         audio,
       }));
+      this.#recordInputAudioUsage(base64Chunk, 16_000);
     } catch (err) {
       console.error(`[openai:${this.targetLanguage}] send failed:`, err.message);
       this.#queueAudio(base64Chunk);
@@ -314,15 +359,91 @@ export class OpenAITranslator {
     });
   }
 
-  close() {
+  #recordFirstSourceTranscript() {
+    if (
+      this.streamKind !== 'speaker-transcript'
+      || this.firstSourceTranscriptObserved
+      || this.firstInputAt === null
+    ) return;
+    this.firstSourceTranscriptObserved = true;
+    logAudioMetric({
+      event: 'first-source-transcript',
+      sessionId: this.sessionId,
+      stream: this.streamKind,
+      provider: 'openai',
+      language: this.targetLanguage,
+      connection: this.connectionNumber,
+      firstSourceTranscriptMs: Date.now() - this.firstInputAt,
+    });
+  }
+
+  #recordInputAudioUsage(base64Chunk, sampleRate) {
+    const durationMs = pcm16Base64DurationMs(base64Chunk, sampleRate);
+    this.inputAudioMs += durationMs;
+    this.totalInputAudioMs += durationMs;
+    if (Date.now() - this.audioUsageIntervalStartedAt >= HEALTH_METRIC_LOG_INTERVAL_MS) {
+      this.#logInputAudioUsage('interval');
+    }
+  }
+
+  #logInputAudioUsage(reason) {
+    if (this.inputAudioMs <= 0) return;
+    const now = Date.now();
+    logAudioMetric({
+      event: 'provider-audio-usage',
+      sessionId: this.sessionId,
+      stream: this.streamKind,
+      provider: 'openai',
+      language: this.targetLanguage,
+      intervalMs: now - this.audioUsageIntervalStartedAt,
+      inputAudioMs: this.inputAudioMs,
+      totalInputAudioMs: this.totalInputAudioMs,
+      reason,
+    });
+    this.audioUsageIntervalStartedAt = now;
+    this.inputAudioMs = 0;
+  }
+
+  #completeClose() {
+    if (this.closeTimer) clearTimeout(this.closeTimer);
+    this.closeTimer = null;
+    const resolve = this.closeResolve;
+    this.closeResolve = null;
+    this.pendingAudio = [];
+    resolve?.();
+  }
+
+  close({ graceful = false, timeoutMs = OPENAI_GRACEFUL_CLOSE_TIMEOUT_MS } = {}) {
+    if (this.closingPromise) return this.closingPromise;
     this.closedByUs = true;
     this.ready = false;
+    this.#logInputAudioUsage('close');
+    const ws = this.ws;
+    if (graceful && ws?.readyState === WebSocket.OPEN) {
+      this.closingPromise = new Promise((resolve) => {
+        this.closeResolve = resolve;
+        this.closeTimer = setTimeout(() => {
+          try { ws.close(); } catch { /* already closed */ }
+          if (this.ws === ws) this.ws = null;
+          this.#completeClose();
+        }, timeoutMs);
+        try {
+          ws.send(JSON.stringify({ type: 'session.close' }));
+        } catch {
+          try { ws.close(); } catch { /* already closed */ }
+          if (this.ws === ws) this.ws = null;
+          this.#completeClose();
+        }
+      });
+      return this.closingPromise;
+    }
     try {
-      this.ws?.close();
+      ws?.close();
     } catch {
       // already closed
     }
     this.ws = null;
     this.pendingAudio = [];
+    return Promise.resolve();
   }
 }

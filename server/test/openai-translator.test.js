@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  OPENAI_GRACEFUL_CLOSE_TIMEOUT_MS,
+  OpenAITranslator,
   openAISessionUpdate,
   resamplePcm16Base64,
 } from '../src/openaiTranslator.js';
@@ -26,4 +28,25 @@ test('OpenAI audio is resampled from 16 kHz PCM16 to 24 kHz PCM16', () => {
   assert.equal(output.readInt16LE(0), 0);
   assert.equal(output.readInt16LE(2), 6_667);
   assert.equal(output.readInt16LE(4), 10_000);
+});
+
+test('OpenAI graceful close requests a final drain and remains bounded', async () => {
+  const sent = [];
+  let socketClosed = false;
+  const translator = new OpenAITranslator({
+    apiKey: 'test-key',
+    targetLanguage: 'pt',
+  });
+  translator.ws = {
+    readyState: 1,
+    send(payload) { sent.push(JSON.parse(payload)); },
+    close() { socketClosed = true; },
+  };
+  translator.ready = true;
+
+  const closing = translator.close({ graceful: true, timeoutMs: 5 });
+  assert.deepEqual(sent, [{ type: 'session.close' }]);
+  await closing;
+  assert.equal(socketClosed, true);
+  assert.equal(OPENAI_GRACEFUL_CLOSE_TIMEOUT_MS, 2_000);
 });

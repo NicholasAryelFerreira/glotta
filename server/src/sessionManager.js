@@ -243,16 +243,23 @@ class LanguageChannel {
     }
   }
 
-  close() {
+  close({ graceful = false } = {}) {
     if (this.lingerTimer) clearTimeout(this.lingerTimer);
-    this.translator.close();
-    for (const ws of this.listeners) {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'status', state: 'ended' }));
-        ws.close();
+    const finish = () => {
+      for (const ws of this.listeners) {
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: 'status', state: 'ended' }));
+          ws.close();
+        }
       }
+      this.listeners.clear();
+    };
+    const closing = this.translator.close({ graceful });
+    if (!graceful) {
+      finish();
+      return Promise.resolve();
     }
-    this.listeners.clear();
+    return Promise.resolve(closing).finally(finish);
   }
 }
 
@@ -586,15 +593,15 @@ class Session {
     }
   }
 
-  closeChannel(lang) {
+  closeChannel(lang, options = {}) {
     const channel = this.channels.get(lang);
-    if (!channel) return;
-    channel.close();
+    if (!channel) return Promise.resolve();
     this.channels.delete(lang);
     if (this.transcriptChannel === channel) {
       this.transcriptChannel = this.channels.values().next().value ?? null;
     }
     this.notifySpeakerStats();
+    return channel.close(options);
   }
 
   notifySpeakerStats() {
@@ -616,16 +623,29 @@ class Session {
     this.maxDurationTimer = null;
     if (this.speakerGraceTimer) clearTimeout(this.speakerGraceTimer);
     this.speakerGraceTimer = null;
-    this.speakerTranscriptTranslator?.close();
-    this.speakerTranscriptTranslator = null;
-    for (const lang of [...this.channels.keys()]) this.closeChannel(lang);
-    for (const ws of this.speakerSockets) {
-      if (ws.readyState === ws.OPEN) ws.close(1000, speakerCloseReason);
+    const graceful = this.provider === 'openai';
+    const closing = [];
+    if (this.speakerTranscriptTranslator) {
+      closing.push(this.speakerTranscriptTranslator.close({ graceful }));
     }
-    this.speakerSockets.clear();
-    this.speakerWs = null;
+    this.speakerTranscriptTranslator = null;
+    for (const lang of [...this.channels.keys()]) {
+      closing.push(this.closeChannel(lang, { graceful }));
+    }
     this.manager.sessions.delete(this.id);
-    console.log(`[session:${this.id}] ended (${reason})`);
+    const finish = () => {
+      for (const ws of this.speakerSockets) {
+        if (ws.readyState === ws.OPEN) ws.close(1000, speakerCloseReason);
+      }
+      this.speakerSockets.clear();
+      this.speakerWs = null;
+      console.log(`[session:${this.id}] ended (${reason})`);
+    };
+    if (!graceful) {
+      finish();
+      return Promise.resolve();
+    }
+    return Promise.allSettled(closing).then(finish);
   }
 }
 

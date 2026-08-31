@@ -1,12 +1,19 @@
 import WebSocket from 'ws';
 import {
   ANOMALY_METRIC_LOG_INTERVAL_MS,
+  HEALTH_METRIC_LOG_INTERVAL_MS,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
   audioBufferLimitBytes,
   estimateQueuedAudioMs,
   logAudioMetric,
   pendingAudioChunkLimit,
+  pcm16Base64DurationMs,
 } from './liveEdge.js';
+import {
+  FAST_RECONNECT_ATTEMPTS,
+  isFirstSlowReconnect,
+  reconnectDelayMs,
+} from './reconnectPolicy.js';
 
 const MODEL = 'gemini-3.5-live-translate-preview';
 
@@ -145,6 +152,7 @@ export class Translator {
     this.reconnectStartedAt = null;
     this.firstInputAt = null;
     this.firstOutputObserved = false;
+    this.firstSourceTranscriptObserved = false;
     this.droppedBufferedChunks = 0;
     this.droppedPendingChunks = 0;
     this.lastDropMetricAt = 0;
@@ -152,6 +160,9 @@ export class Translator {
     this.usageReportNumber = 0;
     this.pendingUsageMetadata = null;
     this.goAwayReceived = false;
+    this.audioUsageIntervalStartedAt = Date.now();
+    this.inputAudioMs = 0;
+    this.totalInputAudioMs = 0;
   }
 
   connect() {
@@ -171,6 +182,8 @@ export class Translator {
         const msg = this.#parse(raw);
         if (!msg) return;
         if (msg.setupComplete || msg.setup_complete) {
+          const reconnectAttempts = this.reconnectAttempts;
+          const reconnectMs = this.reconnectStartedAt === null ? 0 : Date.now() - this.reconnectStartedAt;
           this.ready = true;
           this.reconnectAttempts = 0;
           this.connectionNumber += 1;
@@ -182,13 +195,25 @@ export class Translator {
             language: this.targetLanguage,
             connection: this.connectionNumber,
             resumed: Boolean(this.resumptionHandle),
-            reconnectMs: this.reconnectStartedAt === null ? 0 : Date.now() - this.reconnectStartedAt,
+            reconnectMs,
             pendingChunks: this.pendingAudio.length,
             queueLimitSeconds: LIVE_EDGE_MAX_QUEUE_SECONDS,
           });
+          if (reconnectAttempts > FAST_RECONNECT_ATTEMPTS) {
+            logAudioMetric({
+              event: 'provider-stream-recovered',
+              sessionId: this.sessionId,
+              stream: this.streamKind,
+              provider: this.provider,
+              language: this.targetLanguage,
+              reconnectAttempts,
+              recoveryMs: reconnectMs,
+            });
+          }
           this.reconnectStartedAt = null;
           this.firstInputAt = null;
           this.firstOutputObserved = false;
+          this.firstSourceTranscriptObserved = false;
           this.onStatus?.('translator-online');
           this.#flushPendingAudio();
           if (!settled) {
@@ -237,7 +262,7 @@ export class Translator {
           reject(new Error(`closed before setup (${code} ${reason})`));
         }
         if (!this.closedByUs) {
-          this.reconnectStartedAt = Date.now();
+          if (this.reconnectStartedAt === null) this.reconnectStartedAt = Date.now();
           this.onStatus?.('translator-reconnecting');
           this.#scheduleReconnect();
         }
@@ -337,7 +362,10 @@ export class Translator {
     if (!content) return false;
 
     const inputT = content.inputTranscription || content.input_transcription;
-    if (inputT?.text) this.onTranscript?.('input', inputT.text);
+    if (inputT?.text) {
+      this.#recordFirstSourceTranscript();
+      this.onTranscript?.('input', inputT.text);
+    }
 
     const outputT = content.outputTranscription || content.output_transcription;
     if (outputT?.text) this.onTranscript?.('output', outputT.text);
@@ -368,11 +396,18 @@ export class Translator {
   #scheduleReconnect() {
     if (this.closedByUs) return;
     this.reconnectAttempts += 1;
-    if (this.reconnectAttempts > 5) {
-      this.onError?.(new Error(`Translation for ${this.targetLanguage} could not be re-established`));
-      return;
+    if (isFirstSlowReconnect(this.reconnectAttempts)) {
+      logAudioMetric({
+        event: 'provider-stream-unavailable',
+        sessionId: this.sessionId,
+        stream: this.streamKind,
+        provider: this.provider,
+        language: this.targetLanguage,
+        reconnectAttempts: this.reconnectAttempts,
+        retryEveryMs: reconnectDelayMs(this.reconnectAttempts),
+      });
     }
-    const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 10000);
+    const delay = reconnectDelayMs(this.reconnectAttempts);
     setTimeout(() => {
       if (this.closedByUs) return;
       this.connect().catch((err) => {
@@ -420,6 +455,7 @@ export class Translator {
           realtimeInput: { audio: { data: base64Chunk, mimeType: 'audio/pcm;rate=16000' } },
         }),
       );
+      this.#recordInputAudioUsage(base64Chunk, 16_000);
     } catch (err) {
       console.error(`[gemini:${this.targetLanguage}] send failed:`, err.message);
       this.#queueAudio(base64Chunk);
@@ -445,9 +481,55 @@ export class Translator {
     });
   }
 
+  #recordFirstSourceTranscript() {
+    if (
+      this.streamKind !== 'speaker-transcript'
+      || this.firstSourceTranscriptObserved
+      || this.firstInputAt === null
+    ) return;
+    this.firstSourceTranscriptObserved = true;
+    logAudioMetric({
+      event: 'first-source-transcript',
+      sessionId: this.sessionId,
+      stream: this.streamKind,
+      provider: this.provider,
+      language: this.targetLanguage,
+      connection: this.connectionNumber,
+      firstSourceTranscriptMs: Date.now() - this.firstInputAt,
+    });
+  }
+
+  #recordInputAudioUsage(base64Chunk, sampleRate) {
+    const durationMs = pcm16Base64DurationMs(base64Chunk, sampleRate);
+    this.inputAudioMs += durationMs;
+    this.totalInputAudioMs += durationMs;
+    if (Date.now() - this.audioUsageIntervalStartedAt >= HEALTH_METRIC_LOG_INTERVAL_MS) {
+      this.#logInputAudioUsage('interval');
+    }
+  }
+
+  #logInputAudioUsage(reason) {
+    if (this.inputAudioMs <= 0) return;
+    const now = Date.now();
+    logAudioMetric({
+      event: 'provider-audio-usage',
+      sessionId: this.sessionId,
+      stream: this.streamKind,
+      provider: this.provider,
+      language: this.targetLanguage,
+      intervalMs: now - this.audioUsageIntervalStartedAt,
+      inputAudioMs: this.inputAudioMs,
+      totalInputAudioMs: this.totalInputAudioMs,
+      reason,
+    });
+    this.audioUsageIntervalStartedAt = now;
+    this.inputAudioMs = 0;
+  }
+
   close() {
     this.closedByUs = true;
     this.ready = false;
+    this.#logInputAudioUsage('close');
     try {
       this.ws?.close();
     } catch {

@@ -250,3 +250,30 @@ test('speaker client health reports aggregate older ten-second clients into one-
   assert.match(metrics[1], /"droppedChunks":6/);
   session.end('test complete');
 });
+
+test('ending an OpenAI session waits briefly for final translated output', async () => {
+  const manager = new SessionManager({
+    gemini: 'gemini-test-key',
+    openai: 'openai-test-key',
+  });
+  const session = manager.create({ id: 'DRAIN1', provider: 'openai' });
+  const speaker = fakeSpeakerSocket();
+  session.addSpeakerSocket(speaker);
+  let closeOptions = null;
+  let finishClose;
+  session.speakerTranscriptTranslator = {
+    close(options) {
+      closeOptions = options;
+      return new Promise((resolve) => { finishClose = resolve; });
+    },
+  };
+
+  const ending = session.end('test complete');
+  assert.deepEqual(closeOptions, { graceful: true });
+  assert.equal(manager.get(session.id), undefined);
+  assert.equal(speaker.closed, false);
+
+  finishClose();
+  await ending;
+  assert.equal(speaker.closed, true);
+});

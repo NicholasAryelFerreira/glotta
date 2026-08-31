@@ -49,6 +49,14 @@ export function estimateQueuedAudioMs(bufferedBytes, sampleRate) {
   return Math.round((bufferedBytes / encodedPcmBytesPerSecond(sampleRate)) * 1000);
 }
 
+/** Duration of one base64-encoded mono PCM16 chunk without decoding its content. */
+export function pcm16Base64DurationMs(base64Chunk, sampleRate) {
+  if (typeof base64Chunk !== 'string' || !base64Chunk || !(sampleRate > 0)) return 0;
+  const paddingBytes = base64Chunk.endsWith('==') ? 2 : base64Chunk.endsWith('=') ? 1 : 0;
+  const rawBytes = Math.max(0, Math.floor(base64Chunk.length * 3 / 4) - paddingBytes);
+  return Math.round((rawBytes / (sampleRate * 2)) * 1000);
+}
+
 export function logAudioMetric(metric) {
   console.log(`[audio-metrics] ${JSON.stringify({
     ts: new Date().toISOString(),

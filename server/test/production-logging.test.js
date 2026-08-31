@@ -10,6 +10,10 @@ test('Gemini lifecycle logs keep structured outcomes without duplicate routine l
   assert.match(translator, /event: 'gemini-goaway'/);
   assert.match(translator, /event: 'gemini-unexpected-close'/);
   assert.match(translator, /event: 'gemini-setup'/);
+  assert.match(translator, /event: 'first-source-transcript'/);
+  assert.match(translator, /event: 'provider-audio-usage'/);
+  assert.match(translator, /event: 'provider-stream-unavailable'/);
+  assert.match(translator, /event: 'provider-stream-recovered'/);
   assert.doesNotMatch(translator, /setup complete/);
   assert.doesNotMatch(translator, /reconnecting in/);
 });
@@ -18,6 +22,12 @@ test('OpenAI lifecycle logs expose setup, first output, closure, and queue healt
   assert.match(openaiTranslator, /event: 'openai-setup'/);
   assert.match(openaiTranslator, /event: 'openai-first-output'/);
   assert.match(openaiTranslator, /event: 'openai-unexpected-close'/);
+  assert.match(openaiTranslator, /event: 'first-source-transcript'/);
+  assert.match(openaiTranslator, /event: 'provider-audio-usage'/);
+  assert.match(openaiTranslator, /event: 'provider-stream-unavailable'/);
+  assert.match(openaiTranslator, /event: 'provider-stream-recovered'/);
+  assert.match(openaiTranslator, /type: 'session\.close'/);
+  assert.match(openaiTranslator, /event\.type === 'session\.closed'/);
   assert.match(openaiTranslator, /stage: 'openai-websocket'|openai-websocket/);
   assert.doesNotMatch(openaiTranslator, /console\.log\([^\n]*event\.delta/);
 });

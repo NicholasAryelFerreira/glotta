@@ -8,6 +8,7 @@ import {
   encodedPcmBytesPerSecond,
   estimateQueuedAudioMs,
   parseLiveEdgeMaxQueueSeconds,
+  pcm16Base64DurationMs,
   pendingAudioChunkLimit,
 } from '../src/liveEdge.js';
 
@@ -66,4 +67,10 @@ test('degraded network simulation reproduces legacy lag and caps flagged queue n
   assert.ok(legacy.peakQueuedMs > 5_000, `legacy queue reached only ${legacy.peakQueuedMs}ms`);
   assert.ok(liveEdge.peakQueuedMs <= 1_100, `flagged queue reached ${liveEdge.peakQueuedMs}ms`);
   assert.ok(liveEdge.droppedChunks > 0, 'expected brief dropped audio on a severely degraded link');
+});
+
+test('provider usage measures audio duration without logging or decoding its content', () => {
+  const pcm = Buffer.alloc(16_000 * 2 / 10); // 100 ms of mono PCM16 at 16 kHz
+  assert.equal(pcm16Base64DurationMs(pcm.toString('base64'), 16_000), 100);
+  assert.equal(pcm16Base64DurationMs('', 16_000), 0);
 });
