@@ -14,9 +14,9 @@ services:
     startCommand: npm start
     envVars:
       # Set the actual value in the Render dashboard (kept secret, not in git).
-      - key: GEMINI_API_KEY_PAID
-        sync: false
       - key: GEMINI_API_KEY_FREE
+        sync: false
+      - key: GEMINI_API_KEY_PAID
         sync: false
       - key: OPENAI_API_KEY
         sync: false

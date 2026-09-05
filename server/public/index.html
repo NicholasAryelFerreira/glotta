@@ -47,7 +47,7 @@
           <span class="session-action-label" id="weeklyLabel">Main Sunday Sermon</span>
         </span>
       </button>
-      <fieldset class="tier-picker">
+      <fieldset class="tier-picker provider-picker">
         <legend>Translation provider</legend>
         <div class="tier-toggle">
           <input type="radio" name="provider" id="providerGemini" value="gemini" checked>
@@ -60,10 +60,10 @@
       <fieldset class="tier-picker">
         <legend>Session type</legend>
         <div class="tier-toggle">
-          <input type="radio" name="apiTier" id="tierPaid" value="paid" checked>
-          <label for="tierPaid">Paid</label>
-          <input type="radio" name="apiTier" id="tierFree" value="free">
+          <input type="radio" name="apiTier" id="tierFree" value="free" checked>
           <label for="tierFree">Free</label>
+          <input type="radio" name="apiTier" id="tierPaid" value="paid">
+          <label for="tierPaid">Paid</label>
         </div>
         <p class="tier-note" id="tierNote" aria-live="polite"></p>
       </fieldset>
@@ -90,8 +90,8 @@ const PROVIDER_NOTES = {
   openai: 'Uses gpt-realtime-translate. It detects 70+ spoken input languages, translates into 13 target languages, and is available as Paid only.',
 };
 const TIER_NOTES = {
-  paid: 'Default. Uses paid API access for the selected translation provider.',
-  free: 'Uses the separate free-tier Gemini API key.',
+  paid: 'Uses paid API access for the selected translation provider.',
+  free: 'Default. Uses the separate free-tier Gemini API key.',
 };
 let providerAvailability = { gemini: true, openai: true };
 let tierAvailability = {
@@ -99,6 +99,7 @@ let tierAvailability = {
   openai: { paid: true, free: false },
 };
 let controlsBusy = false;
+let geminiApiTier = 'free';
 
 function selectedProvider() {
   return providerInputs.find((input) => input.checked)?.value === 'openai' ? 'openai' : 'gemini';
@@ -114,6 +115,7 @@ function updateSelectionState() {
   if (provider === 'openai' || availableTiers[selectedApiTier()] === false) {
     document.getElementById('tierPaid').checked = true;
   }
+  if (provider === 'gemini') geminiApiTier = selectedApiTier();
   providerInputs.forEach((input) => {
     input.disabled = controlsBusy || providerAvailability[input.value] === false;
   });
@@ -126,7 +128,12 @@ function updateSelectionState() {
   tierNote.textContent = TIER_NOTES[selectedApiTier()];
 }
 
-providerInputs.forEach((input) => input.addEventListener('change', updateSelectionState));
+providerInputs.forEach((input) => input.addEventListener('change', () => {
+  if (selectedProvider() === 'gemini') {
+    document.getElementById(geminiApiTier === 'paid' ? 'tierPaid' : 'tierFree').checked = true;
+  }
+  updateSelectionState();
+}));
 tierInputs.forEach((input) => input.addEventListener('change', updateSelectionState));
 updateSelectionState();
 

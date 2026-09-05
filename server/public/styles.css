@@ -161,6 +161,7 @@ select.input option { color: #16122b; }
   padding: 0;
   margin: 18px 0 0;
 }
+.provider-picker { margin-top: 24px; }
 .tier-picker legend {
   width: 100%;
   padding: 0;

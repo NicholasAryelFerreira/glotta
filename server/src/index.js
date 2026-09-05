@@ -32,12 +32,12 @@ const API_KEYS = {
 // If unset, creation is open (e.g. for local development).
 const CREATE_PASSWORD = process.env.PASSWORD;
 
-if (!API_KEYS.gemini.paid) {
-  console.error('Missing GEMINI_API_KEY_PAID. Copy .env.example to .env and set the paid Gemini key.');
+if (!API_KEYS.gemini.free) {
+  console.error('Missing GEMINI_API_KEY_FREE. Copy .env.example to .env and set the free Gemini key.');
   process.exit(1);
 }
-if (!API_KEYS.gemini.free) {
-  console.warn('No GEMINI_API_KEY_FREE set — the free Gemini option will be unavailable.');
+if (!API_KEYS.gemini.paid) {
+  console.warn('No GEMINI_API_KEY_PAID set — the paid Gemini option will be unavailable.');
 }
 if (!API_KEYS.openai) {
   console.warn('No OPENAI_API_KEY set — the OpenAI GPT provider will be unavailable.');

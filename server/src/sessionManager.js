@@ -62,10 +62,10 @@ export function normalizeProvider(provider) {
   return provider === 'openai' ? 'openai' : 'gemini';
 }
 
-// Paid is the safe default for older clients and omitted or unexpected values.
+// Free Gemini is the default for older clients and omitted or unexpected values.
 // OpenAI has no free option, so it is always normalized to paid.
 export function normalizeApiTier(apiTier, provider = 'gemini') {
-  return normalizeProvider(provider) === 'gemini' && apiTier === 'free' ? 'free' : 'paid';
+  return normalizeProvider(provider) === 'openai' || apiTier === 'paid' ? 'paid' : 'free';
 }
 
 /**

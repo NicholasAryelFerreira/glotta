@@ -13,7 +13,7 @@ Glotta is a real-time translation platform for lectures, trainings, sermons, and
 - Creates a speaker-led translation session with a QR join link.
 - Streams microphone or sound-board audio to a Node.js relay server over WebSockets.
 - Uses Gemini Live Translate or OpenAI `gpt-realtime-translate` to generate translated speech and captions.
-- Defaults each new session to Paid and Google Gemini, with a Free option available only for Gemini and an OpenAI GPT provider option for comparison and fallback.
+- Defaults each new session to Free and Google Gemini, with a Paid option and an OpenAI GPT provider option for comparison and fallback.
 - Supports multiple listener languages at the same time, with one shared provider stream per language.
 - Lets listeners join from a browser without installing an app.
 - Shows the speaker live listener counts, an audio input meter, and a bounded source transcript.
@@ -31,7 +31,7 @@ The server keeps all provider API keys private, manages live sessions, fans spea
 
 ## Translation providers
 
-The browser landing page shows a Google Gemini/OpenAI GPT selector below the weekly-session button, followed by a Paid/Free selector. Gemini and Paid are selected by default. Free can be selected only with Gemini; choosing OpenAI forces Paid and disables Free.
+The browser landing page shows a Google Gemini/OpenAI GPT selector below the weekly-session button, followed by a Free/Paid selector. Gemini and Free are selected by default. Free can be selected only with Gemini; choosing OpenAI forces Paid and disables Free.
 
 | Provider | Target output languages | Notes |
 | --- | --- | --- |
@@ -51,7 +51,7 @@ The browser sends the selected provider and session type to Glotta. The API keys
 ## Prerequisites
 
 - Node.js 20.19.4 or newer.
-- Paid and free Gemini API keys with access to Gemini Live Translate.
+- Free and paid Gemini API keys with access to Gemini Live Translate.
 - An OpenAI API key with access to `gpt-realtime-translate` for the optional OpenAI provider.
 - A public HTTPS deployment for real services, or a shared local network for testing.
 
@@ -67,8 +67,8 @@ npm install
 Create a `.env` file in `server/`:
 
 ```env
-GEMINI_API_KEY_PAID=your-paid-gemini-key
 GEMINI_API_KEY_FREE=your-free-gemini-key
+GEMINI_API_KEY_PAID=your-paid-gemini-key
 OPENAI_API_KEY=your-openai-key
 PASSWORD=choose-a-speaker-password
 LIVE_EDGE_MAX_QUEUE_SECONDS=0
@@ -110,8 +110,8 @@ eas build --platform ios --profile preview
 Deploy `server/` to a Node host such as Render, Railway, Fly.io, or a VPS. Configure:
 
 ```env
-GEMINI_API_KEY_PAID=your-paid-gemini-key
 GEMINI_API_KEY_FREE=your-free-gemini-key
+GEMINI_API_KEY_PAID=your-paid-gemini-key
 OPENAI_API_KEY=your-openai-key
 PASSWORD=choose-a-speaker-password
 PUBLIC_BASE_URL=https://your-public-url.example.com
