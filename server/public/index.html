@@ -57,6 +57,16 @@
         </div>
         <p class="tier-note" id="providerNote" aria-live="polite"></p>
       </fieldset>
+      <fieldset class="tier-picker">
+        <legend>Session type</legend>
+        <div class="tier-toggle">
+          <input type="radio" name="apiTier" id="tierPaid" value="paid" checked>
+          <label for="tierPaid">Paid</label>
+          <input type="radio" name="apiTier" id="tierFree" value="free">
+          <label for="tierFree">Free</label>
+        </div>
+        <p class="tier-note" id="tierNote" aria-live="polite"></p>
+      </fieldset>
       <p class="hint" style="margin:16px auto 2px">You are the speaker. Listeners join by scanning a QR code on the next screen — no app to install.
         The weekly session always uses the same code, link and QR — safe to print and reuse every Sunday.</p>
     </div>
@@ -72,32 +82,53 @@ const errEl = document.getElementById('err');
 const pwdEl = document.getElementById('pwd');
 const providerInputs = [...document.querySelectorAll('input[name="provider"]')];
 const providerNote = document.getElementById('providerNote');
+const tierInputs = [...document.querySelectorAll('input[name="apiTier"]')];
+const tierNote = document.getElementById('tierNote');
 const PWD_KEY = 'glotta.pwd';
 const PROVIDER_NOTES = {
-  gemini: 'Default. Uses the paid Google Gemini service and offers translated audio and captions in 70+ target languages.',
-  openai: 'Uses gpt-realtime-translate. It detects 70+ spoken input languages and translates into 13 target languages.',
+  gemini: 'Default provider. Offers translated audio and captions in 70+ target languages.',
+  openai: 'Uses gpt-realtime-translate. It detects 70+ spoken input languages, translates into 13 target languages, and is available as Paid only.',
+};
+const TIER_NOTES = {
+  paid: 'Default. Uses paid API access for the selected translation provider.',
+  free: 'Uses the separate free-tier Gemini API key.',
 };
 let providerAvailability = { gemini: true, openai: true };
+let tierAvailability = {
+  gemini: { paid: true, free: true },
+  openai: { paid: true, free: false },
+};
+let controlsBusy = false;
 
 function selectedProvider() {
   return providerInputs.find((input) => input.checked)?.value === 'openai' ? 'openai' : 'gemini';
 }
 
-function updateProviderNote() {
+function selectedApiTier() {
+  return tierInputs.find((input) => input.checked)?.value === 'free' ? 'free' : 'paid';
+}
+
+function updateSelectionState() {
   const provider = selectedProvider();
+  const availableTiers = tierAvailability[provider] || { paid: false, free: false };
+  if (provider === 'openai' || availableTiers[selectedApiTier()] === false) {
+    document.getElementById('tierPaid').checked = true;
+  }
+  providerInputs.forEach((input) => {
+    input.disabled = controlsBusy || providerAvailability[input.value] === false;
+  });
+  tierInputs.forEach((input) => {
+    input.disabled = controlsBusy || availableTiers[input.value] === false;
+  });
   providerNote.textContent = providerAvailability[provider] === false
     ? PROVIDER_NOTES[provider] + ' This provider is not configured on the server.'
     : PROVIDER_NOTES[provider];
+  tierNote.textContent = TIER_NOTES[selectedApiTier()];
 }
 
-function setProviderInputsDisabled(busy) {
-  providerInputs.forEach((input) => {
-    input.disabled = busy || providerAvailability[input.value] === false;
-  });
-}
-
-providerInputs.forEach((input) => input.addEventListener('change', updateProviderNote));
-updateProviderNote();
+providerInputs.forEach((input) => input.addEventListener('change', updateSelectionState));
+tierInputs.forEach((input) => input.addEventListener('change', updateSelectionState));
+updateSelectionState();
 
 // Remember the passcode on this device so the church only types it once.
 pwdEl.value = localStorage.getItem(PWD_KEY) || '';
@@ -110,11 +141,12 @@ fetch('/api/config')
   .then((d) => {
     weeklySessionId = d.weeklySessionId;
     if (d.providers) providerAvailability = d.providers;
+    if (d.apiTiers) tierAvailability = d.apiTiers;
     if (providerAvailability[selectedProvider()] === false) {
       document.getElementById('providerGemini').checked = true;
     }
-    setProviderInputsDisabled(false);
-    updateProviderNote();
+    controlsBusy = false;
+    updateSelectionState();
     weeklyBtn.disabled = false;
   })
   .catch(() => { weeklyBtn.style.display = 'none'; });
@@ -124,28 +156,32 @@ fetch('/api/config')
 window.addEventListener('pageshow', () => {
   startBtn.disabled = false;
   weeklyBtn.disabled = !weeklySessionId;
-  setProviderInputsDisabled(false);
+  controlsBusy = false;
+  updateSelectionState();
 });
 
 async function startSession(sessionId) {
   const password = pwdEl.value;
   const provider = selectedProvider();
+  const apiTier = selectedApiTier();
   startBtn.disabled = true;
   weeklyBtn.disabled = true;
-  setProviderInputsDisabled(true);
+  controlsBusy = true;
+  updateSelectionState();
   errEl.textContent = '';
   try {
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password, sessionId, provider }),
+      body: JSON.stringify({ password, sessionId, provider, apiTier }),
     });
     if (res.status === 401) {
       errEl.textContent = 'Incorrect password.';
       localStorage.removeItem(PWD_KEY);
       startBtn.disabled = false;
       weeklyBtn.disabled = !weeklySessionId;
-      setProviderInputsDisabled(false);
+      controlsBusy = false;
+      updateSelectionState();
       return;
     }
     if (!res.ok) {
@@ -156,12 +192,14 @@ async function startSession(sessionId) {
     localStorage.setItem(PWD_KEY, password); // worked — remember it
     localStorage.setItem('glotta.title.' + data.sessionId, data.title);
     localStorage.setItem('glotta.provider.' + data.sessionId, data.provider || provider);
+    localStorage.setItem('glotta.apiTier.' + data.sessionId, data.apiTier || apiTier);
     location.href = '/speak/' + data.sessionId;
   } catch (e) {
     errEl.textContent = e.message || 'Could not start a session. Please try again.';
     startBtn.disabled = false;
     weeklyBtn.disabled = !weeklySessionId;
-    setProviderInputsDisabled(false);
+    controlsBusy = false;
+    updateSelectionState();
   }
 }
 

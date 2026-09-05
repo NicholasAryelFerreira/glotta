@@ -109,7 +109,7 @@ export class Translator {
    * @param {string} [opts.sessionId]
    * @param {string} [opts.streamKind]
    * @param {string} [opts.provider]
-   * @param {'paid'} [opts.billingApiTier]
+   * @param {'free'|'paid'} [opts.billingApiTier]
    * @param {boolean} [opts.inputAudioTranscription]
    * @param {boolean} [opts.outputAudioTranscription]
    */

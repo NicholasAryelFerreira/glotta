@@ -13,7 +13,7 @@ Glotta is a real-time translation platform for lectures, trainings, sermons, and
 - Creates a speaker-led translation session with a QR join link.
 - Streams microphone or sound-board audio to a Node.js relay server over WebSockets.
 - Uses Gemini Live Translate or OpenAI `gpt-realtime-translate` to generate translated speech and captions.
-- Defaults each new session to paid Gemini, with an OpenAI GPT provider option for comparison and fallback.
+- Defaults each new session to Paid and Google Gemini, with a Free option available only for Gemini and an OpenAI GPT provider option for comparison and fallback.
 - Supports multiple listener languages at the same time, with one shared provider stream per language.
 - Lets listeners join from a browser without installing an app.
 - Shows the speaker live listener counts, an audio input meter, and a bounded source transcript.
@@ -27,18 +27,18 @@ Speaker browser/app -> PCM audio over WebSocket -> Node relay server -> Gemini o
 Listener browser <- translated audio + captions over WebSocket
 ```
 
-The server keeps both provider API keys private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use a continuous Web Audio playback queue that stays close to live and drops stale audio rather than drifting far behind.
+The server keeps all provider API keys private, manages live sessions, fans speaker audio out to each active language stream, and broadcasts translated audio/captions back to listeners. Browser listeners use a continuous Web Audio playback queue that stays close to live and drops stale audio rather than drifting far behind.
 
 ## Translation providers
 
-The browser landing page shows a Google Gemini/OpenAI GPT selector below the weekly-session button. Gemini is selected by default and is also the server fallback when a client does not send a provider.
+The browser landing page shows a Google Gemini/OpenAI GPT selector below the weekly-session button, followed by a Paid/Free selector. Gemini and Paid are selected by default. Free can be selected only with Gemini; choosing OpenAI forces Paid and disables Free.
 
 | Provider | Target output languages | Notes |
 | --- | --- | --- |
-| Google Gemini | 70+ | Uses `gemini-3.5-live-translate-preview` and the paid Gemini key. |
-| OpenAI GPT | 13 | Uses `gpt-realtime-translate`, which automatically detects 70+ spoken input languages. |
+| Google Gemini | 70+ | Uses `gemini-3.5-live-translate-preview` with the selected paid or free Gemini key. |
+| OpenAI GPT | 13 | Uses `gpt-realtime-translate`, which automatically detects 70+ spoken input languages. Paid only. |
 
-The browser sends only the selected provider to Glotta. Both API keys remain on the relay server. The speaker page remembers the provider so recovery after a Render restart preserves it. Glotta streams audio and captions in memory and does not persist them to a database or file. The provider is fixed for the life of an active session; reconnecting the weekly code with the other provider shows an error instead of silently switching it.
+The browser sends the selected provider and session type to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. The provider and session type are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
 
 ## Repository layout
 
@@ -51,7 +51,7 @@ The browser sends only the selected provider to Glotta. Both API keys remain on 
 ## Prerequisites
 
 - Node.js 20.19.4 or newer.
-- A paid Gemini API key with access to Gemini Live Translate.
+- Paid and free Gemini API keys with access to Gemini Live Translate.
 - An OpenAI API key with access to `gpt-realtime-translate` for the optional OpenAI provider.
 - A public HTTPS deployment for real services, or a shared local network for testing.
 
@@ -68,6 +68,7 @@ Create a `.env` file in `server/`:
 
 ```env
 GEMINI_API_KEY_PAID=your-paid-gemini-key
+GEMINI_API_KEY_FREE=your-free-gemini-key
 OPENAI_API_KEY=your-openai-key
 PASSWORD=choose-a-speaker-password
 LIVE_EDGE_MAX_QUEUE_SECONDS=0
@@ -110,6 +111,7 @@ Deploy `server/` to a Node host such as Render, Railway, Fly.io, or a VPS. Confi
 
 ```env
 GEMINI_API_KEY_PAID=your-paid-gemini-key
+GEMINI_API_KEY_FREE=your-free-gemini-key
 OPENAI_API_KEY=your-openai-key
 PASSWORD=choose-a-speaker-password
 PUBLIC_BASE_URL=https://your-public-url.example.com

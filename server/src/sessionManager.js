@@ -62,6 +62,12 @@ export function normalizeProvider(provider) {
   return provider === 'openai' ? 'openai' : 'gemini';
 }
 
+// Paid is the safe default for older clients and omitted or unexpected values.
+// OpenAI has no free option, so it is always normalized to paid.
+export function normalizeApiTier(apiTier, provider = 'gemini') {
+  return normalizeProvider(provider) === 'gemini' && apiTier === 'free' ? 'free' : 'paid';
+}
+
 /**
  * One language channel inside a session: one provider translator shared by
  * every listener of that language.
@@ -81,6 +87,7 @@ class LanguageChannel {
 
   #createTranslator() {
     return this.session.manager.createTranslator(this.session.provider, {
+      apiTier: this.session.apiTier,
       targetLanguage: this.lang,
       echoTargetLanguage: this.session.echoTargetLanguage,
       onAudio: (data) => {
@@ -261,12 +268,13 @@ class LanguageChannel {
 }
 
 class Session {
-  constructor(manager, { title, echoTargetLanguage = true, id, provider }) {
+  constructor(manager, { title, echoTargetLanguage = true, id, provider, apiTier }) {
     this.manager = manager;
     this.id = id || makeSessionId();
     this.title = title || 'Live translation';
     this.echoTargetLanguage = Boolean(echoTargetLanguage);
     this.provider = normalizeProvider(provider);
+    this.apiTier = normalizeApiTier(apiTier, this.provider);
     this.createdAt = Date.now();
     this.speakerSockets = new Set();
     this.speakerWs = null;
@@ -386,6 +394,7 @@ class Session {
   ensureSpeakerTranscript() {
     if (this.speakerTranscriptTranslator) return;
     const translator = this.manager.createTranscriptStream(this.provider, {
+      apiTier: this.apiTier,
       targetLanguage: SPEAKER_TRANSCRIPT_LANGUAGE,
       echoTargetLanguage: false,
       onAudio: () => {},
@@ -667,26 +676,44 @@ class Session {
 
 export class SessionManager {
   constructor(apiKeys) {
-    // A string keeps isolated tests concise. The former { paid } shape remains
-    // accepted so an in-flight deployment can roll forward without key churn.
+    // A string keeps isolated tests concise. Earlier flat object shapes remain
+    // accepted so tests and in-flight deployments can roll forward safely.
     this.apiKeys = typeof apiKeys === 'string'
-      ? { gemini: apiKeys, openai: apiKeys }
+      ? { gemini: { free: apiKeys, paid: apiKeys }, openai: apiKeys }
       : {
-          gemini: apiKeys?.gemini ?? apiKeys?.paid,
+          gemini: {
+            free: apiKeys?.gemini?.free ?? apiKeys?.free,
+            paid: apiKeys?.gemini?.paid ?? apiKeys?.gemini ?? apiKeys?.paid,
+          },
           openai: apiKeys?.openai,
         };
     this.sessions = new Map(); // id -> Session
   }
 
   hasProvider(provider) {
-    return Boolean(this.apiKeys?.[normalizeProvider(provider)]);
+    const normalized = normalizeProvider(provider);
+    return normalized === 'openai'
+      ? Boolean(this.apiKeys?.openai)
+      : Boolean(this.apiKeys?.gemini?.paid || this.apiKeys?.gemini?.free);
   }
 
-  apiKeyForProvider(provider) {
+  hasApiTier(provider, apiTier) {
     const normalized = normalizeProvider(provider);
-    const apiKey = this.apiKeys?.[normalized];
+    if (normalized === 'openai' && apiTier === 'free') return false;
+    const tier = normalizeApiTier(apiTier, normalized);
+    return normalized === 'openai'
+      ? tier === 'paid' && Boolean(this.apiKeys?.openai)
+      : Boolean(this.apiKeys?.gemini?.[tier]);
+  }
+
+  apiKeyForProvider(provider, apiTier = 'paid') {
+    const normalized = normalizeProvider(provider);
+    const tier = normalizeApiTier(apiTier, normalized);
+    const apiKey = normalized === 'openai'
+      ? this.apiKeys?.openai
+      : this.apiKeys?.gemini?.[tier];
     if (!apiKey) {
-      const name = normalized === 'openai' ? 'OpenAI' : 'paid Gemini';
+      const name = normalized === 'openai' ? 'OpenAI' : `${tier} Gemini`;
       throw new Error(`Missing ${name} API key`);
     }
     return apiKey;
@@ -694,31 +721,33 @@ export class SessionManager {
 
   createTranslator(provider, options) {
     const normalized = normalizeProvider(provider);
+    const apiTier = normalizeApiTier(options.apiTier, normalized);
     const TranslatorClass = normalized === 'openai' ? OpenAITranslator : Translator;
     return new TranslatorClass({
       ...options,
-      apiKey: this.apiKeyForProvider(normalized),
+      apiKey: this.apiKeyForProvider(normalized, apiTier),
       provider: normalized,
-      billingApiTier: 'paid',
+      billingApiTier: apiTier,
     });
   }
 
   createTranscriptStream(provider, options) {
     const normalized = normalizeProvider(provider);
+    const apiTier = normalizeApiTier(options.apiTier, normalized);
     if (normalized === 'openai') {
       return new OpenAITranslator({
         ...options,
         streamMode: 'transcription',
-        apiKey: this.apiKeyForProvider(normalized),
+        apiKey: this.apiKeyForProvider(normalized, apiTier),
         provider: normalized,
-        billingApiTier: 'paid',
+        billingApiTier: apiTier,
       });
     }
     return new Translator({
       ...options,
-      apiKey: this.apiKeyForProvider(normalized),
+      apiKey: this.apiKeyForProvider(normalized, apiTier),
       provider: normalized,
-      billingApiTier: 'paid',
+      billingApiTier: apiTier,
     });
   }
 
@@ -728,12 +757,13 @@ export class SessionManager {
     // Reviving a code that still exists (e.g. two speaker tabs) is a no-op.
     if (id && this.sessions.has(id)) return this.sessions.get(id);
     const provider = normalizeProvider(opts.provider);
-    this.apiKeyForProvider(provider);
-    const session = new Session(this, { ...opts, id, provider });
+    const apiTier = normalizeApiTier(opts.apiTier, provider);
+    this.apiKeyForProvider(provider, apiTier);
+    const session = new Session(this, { ...opts, id, provider, apiTier });
     this.sessions.set(session.id, session);
     console.log(
       `[session:${session.id}] ${id ? 'revived' : 'created'} ` +
-      `("${session.title}", provider: ${session.provider})`,
+      `("${session.title}", provider: ${session.provider}, tier: ${session.apiTier})`,
     );
     return session;
   }

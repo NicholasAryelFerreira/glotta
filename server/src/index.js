@@ -6,7 +6,12 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
-import { isValidSessionId, normalizeProvider, SessionManager } from './sessionManager.js';
+import {
+  isValidSessionId,
+  normalizeApiTier,
+  normalizeProvider,
+  SessionManager,
+} from './sessionManager.js';
 import { isSupportedLanguage, languagesForProvider } from './languages.js';
 import {
   LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS,
@@ -16,7 +21,10 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const API_KEYS = {
-  gemini: process.env.GEMINI_API_KEY_PAID,
+  gemini: {
+    free: process.env.GEMINI_API_KEY_FREE,
+    paid: process.env.GEMINI_API_KEY_PAID,
+  },
   openai: process.env.OPENAI_API_KEY,
 };
 // Shared passcode required to *create* a session (i.e. to be the speaker), so
@@ -24,9 +32,12 @@ const API_KEYS = {
 // If unset, creation is open (e.g. for local development).
 const CREATE_PASSWORD = process.env.PASSWORD;
 
-if (!API_KEYS.gemini) {
+if (!API_KEYS.gemini.paid) {
   console.error('Missing GEMINI_API_KEY_PAID. Copy .env.example to .env and set the paid Gemini key.');
   process.exit(1);
+}
+if (!API_KEYS.gemini.free) {
+  console.warn('No GEMINI_API_KEY_FREE set — the free Gemini option will be unavailable.');
 }
 if (!API_KEYS.openai) {
   console.warn('No OPENAI_API_KEY set — the OpenAI GPT provider will be unavailable.');
@@ -80,11 +91,21 @@ app.get('/api/config', (req, res) => {
       gemini: manager.hasProvider('gemini'),
       openai: manager.hasProvider('openai'),
     },
+    apiTiers: {
+      gemini: {
+        paid: manager.hasApiTier('gemini', 'paid'),
+        free: manager.hasApiTier('gemini', 'free'),
+      },
+      openai: {
+        paid: manager.hasApiTier('openai', 'paid'),
+        free: false,
+      },
+    },
   });
 });
 
 app.post('/api/sessions', (req, res) => {
-  const { title, echoTargetLanguage, password, sessionId, provider } = req.body || {};
+  const { title, echoTargetLanguage, password, sessionId, provider, apiTier } = req.body || {};
   if (CREATE_PASSWORD && password !== CREATE_PASSWORD) {
     return res.status(401).json({ error: 'Incorrect password' });
   }
@@ -92,14 +113,20 @@ app.post('/api/sessions', (req, res) => {
     return res.status(400).json({ error: 'Invalid session code' });
   }
   const requestedProvider = normalizeProvider(provider);
+  if (requestedProvider === 'openai' && apiTier === 'free') {
+    return res.status(400).json({ error: 'Free sessions are available only with Google Gemini.' });
+  }
+  const requestedApiTier = normalizeApiTier(apiTier, requestedProvider);
   const existingSession = sessionId ? manager.get(sessionId) : null;
-  if (existingSession && existingSession.provider !== requestedProvider) {
+  if (existingSession && (
+    existingSession.provider !== requestedProvider || existingSession.apiTier !== requestedApiTier
+  )) {
     return res.status(409).json({
-      error: 'This session is already using ' + existingSession.provider + '. Select the same provider to reconnect.',
+      error: 'This session is already using ' + existingSession.provider + ' with the ' + existingSession.apiTier + ' option. Select the same provider and option to reconnect.',
     });
   }
-  if (!manager.hasProvider(requestedProvider)) {
-    return res.status(503).json({ error: 'The selected translation provider is not configured.' });
+  if (!manager.hasApiTier(requestedProvider, requestedApiTier)) {
+    return res.status(503).json({ error: 'The selected translation provider and session type are not configured.' });
   }
   // sessionId is optional: the home page omits it (new code), while the speaker
   // page passes it to revive its session under the same code after a restart.
@@ -108,11 +135,13 @@ app.post('/api/sessions', (req, res) => {
     echoTargetLanguage,
     id: sessionId,
     provider: requestedProvider,
+    apiTier: requestedApiTier,
   });
   res.json({
     sessionId: session.id,
     title: session.title,
     provider: session.provider,
+    apiTier: session.apiTier,
     joinUrl: `${baseUrl(req)}/join/${session.id}`,
   });
 });
@@ -124,6 +153,7 @@ app.get('/api/sessions/:id', (req, res) => {
     sessionId: session.id,
     title: session.title,
     provider: session.provider,
+    apiTier: session.apiTier,
     speakerOnline: Boolean(session.speakerWs && session.speakerWs.readyState === session.speakerWs.OPEN),
     activeLanguages: [...session.channels.keys()],
   });

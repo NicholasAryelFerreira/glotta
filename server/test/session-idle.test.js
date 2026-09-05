@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  normalizeApiTier,
   normalizeProvider,
   SESSION_MAX_DURATION_MINUTES,
   SessionManager,
@@ -82,25 +83,42 @@ test('only one device can claim a session audio input at a time', () => {
 });
 
 
-test('sessions default to paid Gemini and preserve an explicit OpenAI provider', () => {
+test('sessions default to paid, route free Gemini separately, and keep OpenAI paid-only', () => {
   const manager = new SessionManager({
-    gemini: 'paid-gemini-test-key',
+    gemini: {
+      paid: 'paid-gemini-test-key',
+      free: 'free-gemini-test-key',
+    },
     openai: 'openai-test-key',
   });
   const defaultSession = manager.create({ id: 'GEMINI' });
+  const freeSession = manager.create({ id: 'FREE01', provider: 'gemini', apiTier: 'free' });
   const openaiSession = manager.create({ id: 'OPENAI', provider: 'openai' });
+  const openaiFreeRequest = manager.create({ id: 'OPENFR', provider: 'openai', apiTier: 'free' });
   const unexpectedSession = manager.create({ id: 'SAFE01', provider: 'OPENAI' });
 
   try {
     assert.equal(defaultSession.provider, 'gemini');
+    assert.equal(defaultSession.apiTier, 'paid');
+    assert.equal(freeSession.apiTier, 'free');
     assert.equal(openaiSession.provider, 'openai');
+    assert.equal(openaiSession.apiTier, 'paid');
+    assert.equal(openaiFreeRequest.apiTier, 'paid');
     assert.equal(unexpectedSession.provider, 'gemini');
-    assert.equal(manager.apiKeyForProvider('gemini'), 'paid-gemini-test-key');
+    assert.equal(manager.apiKeyForProvider('gemini', 'paid'), 'paid-gemini-test-key');
+    assert.equal(manager.apiKeyForProvider('gemini', 'free'), 'free-gemini-test-key');
     assert.equal(manager.apiKeyForProvider('openai'), 'openai-test-key');
+    assert.equal(manager.hasApiTier('gemini', 'free'), true);
+    assert.equal(manager.hasApiTier('openai', 'free'), false);
     assert.equal(normalizeProvider(undefined), 'gemini');
+    assert.equal(normalizeApiTier(undefined, 'gemini'), 'paid');
+    assert.equal(normalizeApiTier('free', 'gemini'), 'free');
+    assert.equal(normalizeApiTier('free', 'openai'), 'paid');
   } finally {
     defaultSession.end('test complete');
+    freeSession.end('test complete');
     openaiSession.end('test complete');
+    openaiFreeRequest.end('test complete');
     unexpectedSession.end('test complete');
   }
 });
