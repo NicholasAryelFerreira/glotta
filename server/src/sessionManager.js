@@ -793,6 +793,9 @@ export class SessionManager {
     }
     return new Translator({
       ...options,
+      // Paid speaker captions use the lower-cost text-only model. Testing
+      // retains Live Translate because its Gemini key is on the free tier.
+      streamMode: apiTier === 'paid' ? 'transcription' : 'translation',
       apiKey: this.apiKeyForProvider(normalized, apiTier),
       provider: normalized,
       billingApiTier: apiTier,

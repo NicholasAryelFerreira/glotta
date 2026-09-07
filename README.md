@@ -35,7 +35,7 @@ The browser landing page shows a Google Gemini/OpenAI GPT selector below the wee
 
 | Provider | Target output languages | Notes |
 | --- | --- | --- |
-| Google Gemini | 70+ | Uses `gemini-3.5-live-translate-preview` with the paid Production key or free Testing key. |
+| Google Gemini | 70+ | Listener audio/captions use `gemini-3.5-live-translate-preview` only for active listener languages. Production speaker captions use `gemini-3.5-transcribe-live`; Testing keeps the free Live Translate stream. |
 | OpenAI GPT | 13 | Uses `gpt-realtime-translate`, which automatically detects 70+ spoken input languages. Production only. |
 
 The browser sends the selected provider and session mode to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. The provider and session mode are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
@@ -51,7 +51,7 @@ The browser sends the selected provider and session mode to Glotta. The API keys
 ## Prerequisites
 
 - Node.js 20.19.4 or newer.
-- Free and paid Gemini API keys with access to Gemini Live Translate.
+- Free and paid Gemini API keys with access to Gemini Live Translate, plus paid access to Gemini Live Transcribe.
 - An OpenAI API key with access to `gpt-realtime-translate` for the optional OpenAI provider.
 - A public HTTPS deployment for real services, or a shared local network for testing.
 

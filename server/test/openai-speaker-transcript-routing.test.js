@@ -123,11 +123,54 @@ test('Gemini keeps its dedicated speaker transcript stream while listeners are a
   });
   session.pushAudio('before-listener');
   const dedicated = translators.find(({ options }) => options.streamKind === 'speaker-transcript');
+  assert.equal(
+    translators.filter(({ options }) => options.streamKind === 'listener').length,
+    0,
+  );
 
   await session.addListener(fakeSocket(), 'pt-BR');
   session.pushAudio('with-listener');
 
+  assert.equal(
+    translators.filter(({ options }) => options.streamKind === 'listener').length,
+    1,
+  );
   assert.equal(dedicated.closed, false);
   assert.equal(session.speakerTranscriptTranslator, dedicated);
   await session.end('test complete');
+});
+
+test('Gemini speaker captions select Transcribe only for Production', () => {
+  const manager = new SessionManager({
+    gemini: {
+      paid: 'paid-gemini-test-key',
+      free: 'free-gemini-test-key',
+    },
+    openai: 'openai-test-key',
+  });
+
+  const production = manager.createTranscriptStream('gemini', {
+    apiTier: 'paid',
+    targetLanguage: 'en',
+  });
+  const testing = manager.createTranscriptStream('gemini', {
+    apiTier: 'free',
+    targetLanguage: 'en',
+  });
+  const paidListener = manager.createTranslator('gemini', {
+    apiTier: 'paid',
+    targetLanguage: 'pt-BR',
+  });
+  const openai = manager.createTranscriptStream('openai', {
+    apiTier: 'paid',
+    targetLanguage: 'en',
+  });
+
+  assert.equal(production.streamMode, 'transcription');
+  assert.equal(production.model, 'gemini-3.5-transcribe-live');
+  assert.equal(testing.streamMode, 'translation');
+  assert.equal(testing.model, 'gemini-3.5-live-translate-preview');
+  assert.equal(paidListener.streamMode, 'translation');
+  assert.equal(paidListener.model, 'gemini-3.5-live-translate-preview');
+  assert.equal(openai.streamMode, 'transcription');
 });

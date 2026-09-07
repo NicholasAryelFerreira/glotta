@@ -16,9 +16,9 @@ test('listener loads only the selected provider target languages', () => {
   assert.match(joinHtml, /sess\.provider \|\| 'gemini'/);
 });
 
-test('listener UI does not expose the provider or earphone instruction', () => {
+test('listener UI hides provider details and gives three discreet listening options', () => {
   assert.doesNotMatch(joinHtml, /Google Gemini|OpenAI GPT/);
-  assert.doesNotMatch(joinHtml, /Put in your earphones/);
+  assert.match(joinHtml, /Hold your phone to your ear, use headphones, or read the captions silently\./);
   assert.match(joinHtml, /sessionInfo'\)\.textContent = `Session \$\{sess\.sessionId\}`/);
 });
 

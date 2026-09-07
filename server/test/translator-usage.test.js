@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  geminiSetupMessage,
   normalizeUsageMetadata,
   transcriptionSetupFields,
 } from '../src/translator.js';
@@ -40,4 +41,35 @@ test('speaker transcript setup can omit only its unused output transcription', (
     inputAudioTranscription: {},
     outputAudioTranscription: {},
   });
+});
+
+test('Gemini Production speaker captions use text-only Live Transcribe setup', () => {
+  assert.deepEqual(geminiSetupMessage({
+    streamMode: 'transcription',
+    targetLanguage: 'en',
+  }), {
+    setup: {
+      model: 'models/gemini-3.5-transcribe-live',
+      generationConfig: { responseModalities: ['TEXT'] },
+      inputAudioTranscription: { languageCodes: [] },
+    },
+  });
+});
+
+test('Gemini listener and Testing caption streams retain Live Translate setup', () => {
+  const message = geminiSetupMessage({
+    targetLanguage: 'pt-BR',
+    echoTargetLanguage: true,
+    outputAudioTranscription: false,
+  });
+  assert.equal(message.setup.model, 'models/gemini-3.5-live-translate-preview');
+  assert.deepEqual(message.setup.generationConfig, {
+    responseModalities: ['AUDIO'],
+    translationConfig: {
+      targetLanguageCode: 'pt-BR',
+      echoTargetLanguage: true,
+    },
+  });
+  assert.deepEqual(message.setup.inputAudioTranscription, {});
+  assert.equal(message.setup.outputAudioTranscription, undefined);
 });

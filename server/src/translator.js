@@ -15,7 +15,8 @@ import {
   reconnectDelayMs,
 } from './reconnectPolicy.js';
 
-const MODEL = 'gemini-3.5-live-translate-preview';
+export const LIVE_TRANSLATE_MODEL = 'gemini-3.5-live-translate-preview';
+export const LIVE_TRANSCRIBE_MODEL = 'gemini-3.5-transcribe-live';
 
 // The Gemini Live API endpoint. We talk to it over a raw WebSocket because the
 // installed @google/genai SDK does not yet know about `translationConfig` and
@@ -87,6 +88,46 @@ export function transcriptionSetupFields({
   };
 }
 
+export function geminiSetupMessage({
+  streamMode = 'translation',
+  targetLanguage,
+  echoTargetLanguage = false,
+  inputAudioTranscription = true,
+  outputAudioTranscription = true,
+  resumptionHandle = null,
+} = {}) {
+  if (streamMode === 'transcription') {
+    return {
+      setup: {
+        model: `models/${LIVE_TRANSCRIBE_MODEL}`,
+        generationConfig: { responseModalities: ['TEXT'] },
+        inputAudioTranscription: { languageCodes: [] },
+      },
+    };
+  }
+
+  return {
+    setup: {
+      model: `models/${LIVE_TRANSLATE_MODEL}`,
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        translationConfig: {
+          targetLanguageCode: targetLanguage,
+          echoTargetLanguage,
+        },
+      },
+      ...transcriptionSetupFields({
+        inputAudioTranscription,
+        outputAudioTranscription,
+      }),
+      // Gemini periodically replaces Live Translate WebSocket connections.
+      // Preserve context and voice continuity across those handoffs.
+      sessionResumption: resumptionHandle ? { handle: resumptionHandle } : {},
+      contextWindowCompression: { slidingWindow: {} },
+    },
+  };
+}
+
 /**
  * Wraps one Gemini Live translation session for a single target language.
  * Audio in: base64 raw PCM 16-bit / 16 kHz / mono.
@@ -110,6 +151,7 @@ export class Translator {
    * @param {string} [opts.streamKind]
    * @param {string} [opts.provider]
    * @param {'free'|'paid'} [opts.billingApiTier]
+   * @param {'translation'|'transcription'} [opts.streamMode]
    * @param {boolean} [opts.inputAudioTranscription]
    * @param {boolean} [opts.outputAudioTranscription]
    */
@@ -125,6 +167,7 @@ export class Translator {
     streamKind = 'listener',
     provider = 'gemini',
     billingApiTier = 'paid',
+    streamMode = 'translation',
     inputAudioTranscription = true,
     outputAudioTranscription = true,
   }) {
@@ -139,6 +182,10 @@ export class Translator {
     this.streamKind = streamKind;
     this.provider = provider;
     this.billingApiTier = billingApiTier;
+    this.streamMode = streamMode === 'transcription' ? 'transcription' : 'translation';
+    this.model = this.streamMode === 'transcription'
+      ? LIVE_TRANSCRIBE_MODEL
+      : LIVE_TRANSLATE_MODEL;
     this.inputAudioTranscription = inputAudioTranscription;
     this.outputAudioTranscription = outputAudioTranscription;
     this.ws = null;
@@ -192,6 +239,8 @@ export class Translator {
             sessionId: this.sessionId,
             stream: this.streamKind,
             provider: this.provider,
+            model: this.model,
+            mode: this.streamMode,
             language: this.targetLanguage,
             connection: this.connectionNumber,
             resumed: Boolean(this.resumptionHandle),
@@ -277,28 +326,14 @@ export class Translator {
   }
 
   #setupMessage() {
-    return {
-      setup: {
-        model: `models/${MODEL}`,
-        generationConfig: {
-          responseModalities: ['AUDIO'],
-          translationConfig: {
-            targetLanguageCode: this.targetLanguage,
-            echoTargetLanguage: this.echoTargetLanguage,
-          },
-        },
-        ...transcriptionSetupFields({
-          inputAudioTranscription: this.inputAudioTranscription,
-          outputAudioTranscription: this.outputAudioTranscription,
-        }),
-        // Gemini periodically replaces Live API WebSocket connections. Keep
-        // the same logical session across those replacements so context and
-        // voice continuity have the best chance of surviving the handoff.
-        sessionResumption: this.resumptionHandle ? { handle: this.resumptionHandle } : {},
-        // A sermon can exceed the default audio-only context lifetime.
-        contextWindowCompression: { slidingWindow: {} },
-      },
-    };
+    return geminiSetupMessage({
+      streamMode: this.streamMode,
+      targetLanguage: this.targetLanguage,
+      echoTargetLanguage: this.echoTargetLanguage,
+      inputAudioTranscription: this.inputAudioTranscription,
+      outputAudioTranscription: this.outputAudioTranscription,
+      resumptionHandle: this.resumptionHandle,
+    });
   }
 
   #handleSessionManagement(msg) {
@@ -345,6 +380,8 @@ export class Translator {
       sessionId: this.sessionId,
       stream: this.streamKind,
       provider: this.provider,
+      model: this.model,
+      mode: this.streamMode,
       billingApiTier: this.billingApiTier,
       language: this.targetLanguage,
       connection: this.connectionNumber,
@@ -471,6 +508,8 @@ export class Translator {
       sessionId: this.sessionId,
       stream: this.streamKind,
       provider: this.provider,
+      model: this.model,
+      mode: this.streamMode,
       language: this.targetLanguage,
       stage,
       queuedMs,
@@ -493,6 +532,8 @@ export class Translator {
       sessionId: this.sessionId,
       stream: this.streamKind,
       provider: this.provider,
+      model: this.model,
+      mode: this.streamMode,
       language: this.targetLanguage,
       connection: this.connectionNumber,
       firstSourceTranscriptMs: Date.now() - this.firstInputAt,
@@ -516,6 +557,8 @@ export class Translator {
       sessionId: this.sessionId,
       stream: this.streamKind,
       provider: this.provider,
+      model: this.model,
+      mode: this.streamMode,
       language: this.targetLanguage,
       intervalMs: now - this.audioUsageIntervalStartedAt,
       inputAudioMs: this.inputAudioMs,
