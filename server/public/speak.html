@@ -182,9 +182,9 @@ async function reviveSession() {
   const password = localStorage.getItem('glotta.pwd') || '';
   const title = localStorage.getItem(TITLE_KEY) || '';
   const provider = localStorage.getItem(PROVIDER_KEY) === 'openai' ? 'openai' : 'gemini';
-  const apiTier = provider === 'openai' || localStorage.getItem(API_TIER_KEY) === 'paid'
-    ? 'paid'
-    : 'free';
+  const apiTier = provider === 'gemini' && localStorage.getItem(API_TIER_KEY) === 'free'
+    ? 'free'
+    : 'paid';
   try {
     const r = await fetch('/api/sessions', {
       method: 'POST',

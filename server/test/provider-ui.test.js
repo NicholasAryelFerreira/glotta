@@ -6,13 +6,16 @@ import vm from 'node:vm';
 const homeHtml = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
 const inlineScript = homeHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 
-test('home page shows provider selection followed by a free-default tier selector', () => {
+test('home page shows provider selection followed by a production-default mode selector', () => {
   assert.match(homeHtml, /name="provider"[^>]+value="gemini" checked/);
   assert.match(homeHtml, /name="provider"[^>]+value="openai"/);
   assert.match(homeHtml, /Google Gemini/);
   assert.match(homeHtml, /OpenAI GPT/);
-  assert.match(homeHtml, /name="apiTier"[^>]+value="free" checked/);
-  assert.match(homeHtml, /name="apiTier"[^>]+value="paid"/);
+  assert.match(homeHtml, /name="apiTier"[^>]+value="paid" checked/);
+  assert.match(homeHtml, /name="apiTier"[^>]+value="free"/);
+  assert.match(homeHtml, /for="tierPaid">Production</);
+  assert.match(homeHtml, /for="tierFree">Testing</);
+  assert.match(homeHtml, /Testing mode is free, but translation can be unstable or stop temporarily/);
   assert.ok(homeHtml.indexOf('name="provider"') < homeHtml.indexOf('name="apiTier"'));
   assert.match(homeHtml, /tier-picker provider-picker/);
   assert.match(homeHtml, /provider === 'openai'/);

@@ -5,6 +5,7 @@ import test from 'node:test';
 const translator = await readFile(new URL('../src/translator.js', import.meta.url), 'utf8');
 const openaiTranslator = await readFile(new URL('../src/openaiTranslator.js', import.meta.url), 'utf8');
 const serverIndex = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
+const listenerHtml = await readFile(new URL('../public/join.html', import.meta.url), 'utf8');
 
 test('Gemini lifecycle logs keep structured outcomes without duplicate routine lines', () => {
   assert.match(translator, /event: 'gemini-goaway'/);
@@ -32,11 +33,15 @@ test('OpenAI lifecycle logs expose setup, first output, closure, and queue healt
   assert.doesNotMatch(openaiTranslator, /console\.log\([^\n]*event\.delta/);
 });
 
-test('listener departures include connection evidence for future network diagnosis', () => {
+test('existing listener lifecycle lines include bounded anonymous evidence', () => {
+  assert.match(listenerHtml, /listenerId: listenerInstanceId/);
+  assert.match(serverIndex, /listener joined/);
   assert.match(serverIndex, /listener left/);
+  assert.match(serverIndex, /listenerId: \$\{listenerId\}/);
   assert.match(serverIndex, /code: \$\{code\}/);
-  assert.match(serverIndex, /connectedMs: \$\{Date\.now\(\) - connectedAt\}/);
-  assert.match(serverIndex, /active: \$\{channel\.listeners\.size\}/);
+  assert.match(serverIndex, /connectedMs: \$\{disconnectedAt - connectedAt\}/);
+  assert.match(serverIndex, /activeLanguage: \$\{channel\.listeners\.size\}/);
+  assert.match(serverIndex, /activeTotal: \$\{snapshot\.activeTotal\}/);
   assert.match(serverIndex, /active speaker disconnected/);
   assert.match(serverIndex, /graceSeconds: \$\{SPEAKER_GRACE_MS \/ 1000\}/);
 });

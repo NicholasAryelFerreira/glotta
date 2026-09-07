@@ -190,6 +190,27 @@ let audioPlayerSeq = 0;
 const MAX_LIVE_CAPTION_CHARS = 2000;
 const AUDIO_SETUP_TIMEOUT_MS = 5_000;
 const AUDIO_CLOSE_TIMEOUT_MS = 1_000;
+const LISTENER_INSTANCE_KEY = `glotta.listenerInstance.${sessionId}`;
+
+function makeListenerInstanceId() {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function getListenerInstanceId() {
+  try {
+    const stored = sessionStorage.getItem(LISTENER_INSTANCE_KEY);
+    if (/^[a-f0-9]{16}$/.test(stored || '')) return stored;
+    const created = makeListenerInstanceId();
+    sessionStorage.setItem(LISTENER_INSTANCE_KEY, created);
+    return created;
+  } catch {
+    return makeListenerInstanceId();
+  }
+}
+
+const listenerInstanceId = getListenerInstanceId();
 
 function withTimeout(promise, timeoutMs, message) {
   let timer;
@@ -344,7 +365,8 @@ function replaceListenerSocket() {
 function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const socket = new WebSocket(`${proto}://${location.host}/ws/listener/${sessionId}?lang=${encodeURIComponent(langSel.value)}`);
+  const params = new URLSearchParams({ lang: langSel.value, listenerId: listenerInstanceId });
+  const socket = new WebSocket(`${proto}://${location.host}/ws/listener/${sessionId}?${params}`);
   const socketSeq = ++listenerSocketSeq;
   ws = socket;
   socket.onopen = () => {

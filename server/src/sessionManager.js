@@ -62,10 +62,10 @@ export function normalizeProvider(provider) {
   return provider === 'openai' ? 'openai' : 'gemini';
 }
 
-// Free Gemini is the default for older clients and omitted or unexpected values.
+// Production is the safe default. Only an explicit Gemini Testing selection is free.
 // OpenAI has no free option, so it is always normalized to paid.
 export function normalizeApiTier(apiTier, provider = 'gemini') {
-  return normalizeProvider(provider) === 'openai' || apiTier === 'paid' ? 'paid' : 'free';
+  return normalizeProvider(provider) === 'gemini' && apiTier === 'free' ? 'free' : 'paid';
 }
 
 /**
@@ -304,6 +304,13 @@ class Session {
       currentBufferedBytes: 0,
     };
     this.listenerPlayerMetrics = new Map();
+    this.listenerEvidence = {
+      joinEvents: 0,
+      uniqueInstanceIds: new Set(),
+      joinsByLanguage: new Map(),
+      peakByLanguage: new Map(),
+      peakActive: 0,
+    };
     this.audioIdleTimer = null;
     this.maxDurationTimer = setTimeout(() => {
       this.end(
@@ -639,6 +646,45 @@ class Session {
     this.sendToSpeakers({ type: 'stats', total, listeners });
   }
 
+  listenerSnapshot() {
+    const activeByLanguage = {};
+    let activeTotal = 0;
+    for (const [lang, channel] of this.channels) {
+      const active = channel.listeners.size;
+      if (active > 0) activeByLanguage[lang] = active;
+      activeTotal += active;
+    }
+    return { activeTotal, activeByLanguage };
+  }
+
+  recordListenerJoin(listenerInstanceId, lang) {
+    const evidence = this.listenerEvidence;
+    evidence.joinEvents += 1;
+    evidence.uniqueInstanceIds.add(listenerInstanceId);
+    evidence.joinsByLanguage.set(lang, (evidence.joinsByLanguage.get(lang) || 0) + 1);
+    const snapshot = this.listenerSnapshot();
+    evidence.peakActive = Math.max(evidence.peakActive, snapshot.activeTotal);
+    evidence.peakByLanguage.set(
+      lang,
+      Math.max(evidence.peakByLanguage.get(lang) || 0, snapshot.activeByLanguage[lang] || 0),
+    );
+    return {
+      ...snapshot,
+      uniqueInstances: evidence.uniqueInstanceIds.size,
+    };
+  }
+
+  listenerSummary() {
+    const evidence = this.listenerEvidence;
+    return {
+      joinEvents: evidence.joinEvents,
+      uniqueInstances: evidence.uniqueInstanceIds.size,
+      peakActive: evidence.peakActive,
+      joinsByLanguage: Object.fromEntries([...evidence.joinsByLanguage].sort()),
+      peakByLanguage: Object.fromEntries([...evidence.peakByLanguage].sort()),
+    };
+  }
+
   end(reason = 'ended by speaker', speakerCloseReason = 'session ended') {
     if (this.ended) return;
     this.ended = true;
@@ -664,7 +710,9 @@ class Session {
       }
       this.speakerSockets.clear();
       this.speakerWs = null;
-      console.log(`[session:${this.id}] ended (${reason})`);
+      console.log(
+        `[session:${this.id}] ended (${reason}; listenerSummary: ${JSON.stringify(this.listenerSummary())})`,
+      );
     };
     if (!graceful) {
       finish();

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -114,7 +115,7 @@ app.post('/api/sessions', (req, res) => {
   }
   const requestedProvider = normalizeProvider(provider);
   if (requestedProvider === 'openai' && apiTier === 'free') {
-    return res.status(400).json({ error: 'Free sessions are available only with Google Gemini.' });
+    return res.status(400).json({ error: 'Testing mode is available only with Google Gemini.' });
   }
   const requestedApiTier = normalizeApiTier(apiTier, requestedProvider);
   const existingSession = sessionId ? manager.get(sessionId) : null;
@@ -122,11 +123,13 @@ app.post('/api/sessions', (req, res) => {
     existingSession.provider !== requestedProvider || existingSession.apiTier !== requestedApiTier
   )) {
     return res.status(409).json({
-      error: 'This session is already using ' + existingSession.provider + ' with the ' + existingSession.apiTier + ' option. Select the same provider and option to reconnect.',
+      error: 'This session is already using ' + existingSession.provider + ' in ' +
+        (existingSession.apiTier === 'free' ? 'Testing' : 'Production') +
+        ' mode. Select the same provider and mode to reconnect.',
     });
   }
   if (!manager.hasApiTier(requestedProvider, requestedApiTier)) {
-    return res.status(503).json({ error: 'The selected translation provider and session type are not configured.' });
+    return res.status(503).json({ error: 'The selected translation provider and session mode are not configured.' });
   }
   // sessionId is optional: the home page omits it (new code), while the speaker
   // page passes it to revive its session under the same code after a restart.
@@ -214,7 +217,12 @@ wss.on('connection', async (ws, req) => {
   if (role === 'speaker') {
     handleSpeaker(ws, session);
   } else if (role === 'listener') {
-    await handleListener(ws, session, url.searchParams.get('lang'));
+    await handleListener(
+      ws,
+      session,
+      url.searchParams.get('lang'),
+      url.searchParams.get('listenerId'),
+    );
   } else {
     ws.close(4404, 'unknown role');
   }
@@ -293,7 +301,13 @@ function handleSpeaker(ws, session) {
   });
 }
 
-async function handleListener(ws, session, lang) {
+function normalizeListenerInstanceId(listenerId) {
+  return /^[a-f0-9]{16}$/i.test(listenerId || '')
+    ? listenerId.toLowerCase()
+    : `connection-${crypto.randomBytes(8).toString('hex')}`;
+}
+
+async function handleListener(ws, session, lang, requestedListenerId) {
   if (!lang || !isSupportedLanguage(lang, session.provider)) {
     ws.send(JSON.stringify({ type: 'error', message: `Unsupported language: ${lang}` }));
     ws.close(4400, 'unsupported language');
@@ -309,7 +323,14 @@ async function handleListener(ws, session, lang) {
     return;
   }
   const connectedAt = Date.now();
-  console.log(`[session:${session.id}] listener joined (${lang}, active: ${channel.listeners.size})`);
+  const listenerId = normalizeListenerInstanceId(requestedListenerId);
+  const joined = session.recordListenerJoin(listenerId, lang);
+  console.log(
+    `[session:${session.id}] listener joined ` +
+    `(ts: ${new Date(connectedAt).toISOString()}, lang: ${lang}, listenerId: ${listenerId}, ` +
+    `activeLanguage: ${channel.listeners.size}, activeTotal: ${joined.activeTotal}, ` +
+    `uniqueInstances: ${joined.uniqueInstances})`,
+  );
   ws.send(JSON.stringify({ type: 'status', state: 'connected', lang, title: session.title }));
   if (!session.speakerWs) {
     ws.send(JSON.stringify({
@@ -332,9 +353,13 @@ async function handleListener(ws, session, lang) {
 
   ws.on('close', (code) => {
     session.removeListener(ws, lang);
+    const disconnectedAt = Date.now();
+    const snapshot = session.listenerSnapshot();
     console.log(
       `[session:${session.id}] listener left ` +
-      `(${lang}, code: ${code}, connectedMs: ${Date.now() - connectedAt}, active: ${channel.listeners.size})`,
+      `(ts: ${new Date(disconnectedAt).toISOString()}, lang: ${lang}, listenerId: ${listenerId}, ` +
+      `code: ${code}, connectedMs: ${disconnectedAt - connectedAt}, ` +
+      `activeLanguage: ${channel.listeners.size}, activeTotal: ${snapshot.activeTotal})`,
     );
   });
 }

@@ -58,12 +58,12 @@
         <p class="tier-note" id="providerNote" aria-live="polite"></p>
       </fieldset>
       <fieldset class="tier-picker">
-        <legend>Session type</legend>
+        <legend>Session mode</legend>
         <div class="tier-toggle">
-          <input type="radio" name="apiTier" id="tierFree" value="free" checked>
-          <label for="tierFree">Free</label>
-          <input type="radio" name="apiTier" id="tierPaid" value="paid">
-          <label for="tierPaid">Paid</label>
+          <input type="radio" name="apiTier" id="tierPaid" value="paid" checked>
+          <label for="tierPaid">Production</label>
+          <input type="radio" name="apiTier" id="tierFree" value="free">
+          <label for="tierFree">Testing</label>
         </div>
         <p class="tier-note" id="tierNote" aria-live="polite"></p>
       </fieldset>
@@ -87,11 +87,11 @@ const tierNote = document.getElementById('tierNote');
 const PWD_KEY = 'glotta.pwd';
 const PROVIDER_NOTES = {
   gemini: 'Default provider. Offers translated audio and captions in 70+ target languages.',
-  openai: 'Uses gpt-realtime-translate. It detects 70+ spoken input languages, translates into 13 target languages, and is available as Paid only.',
+  openai: 'Uses gpt-realtime-translate. It detects 70+ spoken input languages, translates into 13 target languages, and is available in Production mode only.',
 };
 const TIER_NOTES = {
-  paid: 'Uses paid API access for the selected translation provider.',
-  free: 'Default. Uses the separate free-tier Gemini API key.',
+  paid: 'Recommended for live events. Production mode uses paid API access for more stable translation.',
+  free: 'For short tests only. Testing mode is free, but translation can be unstable or stop temporarily.',
 };
 let providerAvailability = { gemini: true, openai: true };
 let tierAvailability = {
@@ -99,7 +99,7 @@ let tierAvailability = {
   openai: { paid: true, free: false },
 };
 let controlsBusy = false;
-let geminiApiTier = 'free';
+let geminiApiTier = 'paid';
 
 function selectedProvider() {
   return providerInputs.find((input) => input.checked)?.value === 'openai' ? 'openai' : 'gemini';

@@ -83,7 +83,7 @@ test('only one device can claim a session audio input at a time', () => {
 });
 
 
-test('sessions default to free Gemini, offer paid Gemini, and keep OpenAI paid-only', () => {
+test('sessions default to paid Gemini, offer free Gemini testing, and keep OpenAI paid-only', () => {
   const manager = new SessionManager({
     gemini: {
       paid: 'paid-gemini-test-key',
@@ -99,7 +99,7 @@ test('sessions default to free Gemini, offer paid Gemini, and keep OpenAI paid-o
 
   try {
     assert.equal(defaultSession.provider, 'gemini');
-    assert.equal(defaultSession.apiTier, 'free');
+    assert.equal(defaultSession.apiTier, 'paid');
     assert.equal(paidSession.apiTier, 'paid');
     assert.equal(openaiSession.provider, 'openai');
     assert.equal(openaiSession.apiTier, 'paid');
@@ -111,7 +111,7 @@ test('sessions default to free Gemini, offer paid Gemini, and keep OpenAI paid-o
     assert.equal(manager.hasApiTier('gemini', 'free'), true);
     assert.equal(manager.hasApiTier('openai', 'free'), false);
     assert.equal(normalizeProvider(undefined), 'gemini');
-    assert.equal(normalizeApiTier(undefined, 'gemini'), 'free');
+    assert.equal(normalizeApiTier(undefined, 'gemini'), 'paid');
     assert.equal(normalizeApiTier('free', 'gemini'), 'free');
     assert.equal(normalizeApiTier('free', 'openai'), 'paid');
   } finally {
@@ -120,6 +120,49 @@ test('sessions default to free Gemini, offer paid Gemini, and keep OpenAI paid-o
     openaiSession.end('test complete');
     openaiFreeRequest.end('test complete');
     unexpectedSession.end('test complete');
+  }
+});
+
+test('listener evidence counts reconnects without treating them as new browser instances', async () => {
+  const manager = new SessionManager('test-key');
+  manager.createTranslator = () => ({
+    ready: true,
+    connect: async () => {},
+    sendAudio() {},
+    close() {},
+  });
+  const session = manager.create({ id: 'LISTEN' });
+  const listener = () => ({ OPEN: 1, readyState: 1, send() {}, close() { this.readyState = 3; } });
+  const first = listener();
+  const second = listener();
+  const reconnect = listener();
+  const portuguese = listener();
+
+  try {
+    const french = await session.addListener(first, 'fr');
+    session.recordListenerJoin('aaaaaaaaaaaaaaaa', 'fr');
+    await session.addListener(second, 'fr');
+    const peakTwo = session.recordListenerJoin('bbbbbbbbbbbbbbbb', 'fr');
+    assert.equal(peakTwo.activeTotal, 2);
+    assert.equal(peakTwo.uniqueInstances, 2);
+
+    session.removeListener(first, 'fr');
+    await session.addListener(reconnect, 'fr');
+    const sameInstance = session.recordListenerJoin('aaaaaaaaaaaaaaaa', 'fr');
+    assert.equal(sameInstance.uniqueInstances, 2);
+    assert.equal(french.listeners.size, 2);
+
+    await session.addListener(portuguese, 'pt-BR');
+    session.recordListenerJoin('cccccccccccccccc', 'pt-BR');
+    assert.deepEqual(session.listenerSummary(), {
+      joinEvents: 4,
+      uniqueInstances: 3,
+      peakActive: 3,
+      joinsByLanguage: { fr: 3, 'pt-BR': 1 },
+      peakByLanguage: { fr: 2, 'pt-BR': 1 },
+    });
+  } finally {
+    session.end('test complete');
   }
 });
 

@@ -13,7 +13,7 @@ Glotta is a real-time translation platform for lectures, trainings, sermons, and
 - Creates a speaker-led translation session with a QR join link.
 - Streams microphone or sound-board audio to a Node.js relay server over WebSockets.
 - Uses Gemini Live Translate or OpenAI `gpt-realtime-translate` to generate translated speech and captions.
-- Defaults each new session to Free and Google Gemini, with a Paid option and an OpenAI GPT provider option for comparison and fallback.
+- Defaults each new session to Production mode and Google Gemini, with a free Testing mode and an OpenAI GPT provider option for comparison and fallback.
 - Supports multiple listener languages at the same time, with one shared provider stream per language.
 - Lets listeners join from a browser without installing an app.
 - Shows the speaker live listener counts, an audio input meter, and a bounded source transcript.
@@ -31,14 +31,14 @@ The server keeps all provider API keys private, manages live sessions, fans spea
 
 ## Translation providers
 
-The browser landing page shows a Google Gemini/OpenAI GPT selector below the weekly-session button, followed by a Free/Paid selector. Gemini and Free are selected by default. Free can be selected only with Gemini; choosing OpenAI forces Paid and disables Free.
+The browser landing page shows a Google Gemini/OpenAI GPT selector below the weekly-session button, followed by a Production/Testing mode selector. Gemini and Production are selected by default. Production uses paid API access for stable live events. Testing uses the free Gemini key and can be unstable or stop temporarily. Testing can be selected only with Gemini; choosing OpenAI forces Production and disables Testing.
 
 | Provider | Target output languages | Notes |
 | --- | --- | --- |
-| Google Gemini | 70+ | Uses `gemini-3.5-live-translate-preview` with the selected paid or free Gemini key. |
-| OpenAI GPT | 13 | Uses `gpt-realtime-translate`, which automatically detects 70+ spoken input languages. Paid only. |
+| Google Gemini | 70+ | Uses `gemini-3.5-live-translate-preview` with the paid Production key or free Testing key. |
+| OpenAI GPT | 13 | Uses `gpt-realtime-translate`, which automatically detects 70+ spoken input languages. Production only. |
 
-The browser sends the selected provider and session type to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. The provider and session type are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
+The browser sends the selected provider and session mode to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. The provider and session mode are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
 
 ## Repository layout
 
