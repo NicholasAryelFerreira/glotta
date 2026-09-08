@@ -121,6 +121,9 @@ test('Gemini keeps its dedicated speaker transcript stream while listeners are a
   context.after(async () => {
     if (manager.get(session.id)) await session.end('test cleanup');
   });
+  const speaker = fakeSocket();
+  session.addSpeakerSocket(speaker);
+  session.claimSpeaker(speaker);
   session.pushAudio('before-listener');
   const dedicated = translators.find(({ options }) => options.streamKind === 'speaker-transcript');
   assert.equal(
@@ -137,6 +140,16 @@ test('Gemini keeps its dedicated speaker transcript stream while listeners are a
   );
   assert.equal(dedicated.closed, false);
   assert.equal(session.speakerTranscriptTranslator, dedicated);
+
+  dedicated.options.onTranscript('input-interim', 'English source words continuing');
+  dedicated.options.onTranscript('input-final', 'English source words continued.');
+  assert.deepEqual(
+    speaker.sent.filter(({ type }) => type === 'transcript'),
+    [
+      { type: 'transcript', kind: 'input-interim', text: 'English source words continuing' },
+      { type: 'transcript', kind: 'input-final', text: 'English source words continued.' },
+    ],
+  );
   await session.end('test complete');
 });
 

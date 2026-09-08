@@ -128,6 +128,27 @@ export function geminiSetupMessage({
   };
 }
 
+export function transcriptionEvents(content = {}, streamMode = 'translation') {
+  const events = [];
+  if (streamMode === 'transcription') {
+    const interim = content.interimInputTranscription
+      || content.interim_input_transcription;
+    if (interim?.text) events.push({ kind: 'input-interim', text: interim.text });
+  }
+
+  const input = content.inputTranscription || content.input_transcription;
+  if (input?.text) {
+    events.push({
+      kind: streamMode === 'transcription' ? 'input-final' : 'input',
+      text: input.text,
+    });
+  }
+
+  const output = content.outputTranscription || content.output_transcription;
+  if (output?.text) events.push({ kind: 'output', text: output.text });
+  return events;
+}
+
 /**
  * Wraps one Gemini Live translation session for a single target language.
  * Audio in: base64 raw PCM 16-bit / 16 kHz / mono.
@@ -144,7 +165,7 @@ export class Translator {
    * @param {string} opts.targetLanguage BCP-47 code, e.g. "es"
    * @param {boolean} opts.echoTargetLanguage
    * @param {(base64Audio: string) => void} opts.onAudio
-   * @param {(kind: 'input'|'output', text: string) => void} opts.onTranscript
+   * @param {(kind: 'input'|'input-interim'|'input-final'|'output', text: string) => void} opts.onTranscript
    * @param {(err: Error) => void} opts.onError
    * @param {(state: 'translator-online'|'translator-reconnecting') => void} [opts.onStatus]
    * @param {string} [opts.sessionId]
@@ -398,14 +419,10 @@ export class Translator {
     const content = msg.serverContent || msg.server_content;
     if (!content) return false;
 
-    const inputT = content.inputTranscription || content.input_transcription;
-    if (inputT?.text) {
-      this.#recordFirstSourceTranscript();
-      this.onTranscript?.('input', inputT.text);
+    for (const event of transcriptionEvents(content, this.streamMode)) {
+      if (event.kind.startsWith('input')) this.#recordFirstSourceTranscript();
+      this.onTranscript?.(event.kind, event.text);
     }
-
-    const outputT = content.outputTranscription || content.output_transcription;
-    if (outputT?.text) this.onTranscript?.('output', outputT.text);
 
     const turn = content.modelTurn || content.model_turn;
     const parts = turn?.parts ?? [];

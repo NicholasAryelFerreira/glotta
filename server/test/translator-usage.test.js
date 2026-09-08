@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   geminiSetupMessage,
   normalizeUsageMetadata,
+  transcriptionEvents,
   transcriptionSetupFields,
 } from '../src/translator.js';
 
@@ -72,4 +73,25 @@ test('Gemini listener and Testing caption streams retain Live Translate setup', 
   });
   assert.deepEqual(message.setup.inputAudioTranscription, {});
   assert.equal(message.setup.outputAudioTranscription, undefined);
+});
+
+test('Live Transcribe exposes interim hypotheses separately from finalized text', () => {
+  assert.deepEqual(transcriptionEvents({
+    interim_input_transcription: { text: 'Words while speaking' },
+    inputTranscription: { text: 'Words after speaking.' },
+  }, 'transcription'), [
+    { kind: 'input-interim', text: 'Words while speaking' },
+    { kind: 'input-final', text: 'Words after speaking.' },
+  ]);
+});
+
+test('Live Translate retains its existing finalized input and output events', () => {
+  assert.deepEqual(transcriptionEvents({
+    interimInputTranscription: { text: 'unused hypothesis' },
+    inputTranscription: { text: 'Source words' },
+    output_transcription: { text: 'Translated words' },
+  }), [
+    { kind: 'input', text: 'Source words' },
+    { kind: 'output', text: 'Translated words' },
+  ]);
 });

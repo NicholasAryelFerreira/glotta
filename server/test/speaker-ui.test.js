@@ -25,6 +25,48 @@ test('speaker page reports voiced audio and shows transcript recovery states', (
   assert.match(speakHtml, /msg\.state === 'transcript-online'/);
 });
 
+test('speaker page replaces interim transcription and commits finalized text', () => {
+  const boundedText = inlineScript.match(/function boundedText[\s\S]*?\n\}/)?.[0];
+  const updateSpeakerTranscript = inlineScript.match(
+    /function updateSpeakerTranscript[\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(boundedText, 'expected boundedText helper');
+  assert.ok(updateSpeakerTranscript, 'expected updateSpeakerTranscript helper');
+  assert.match(speakHtml, /typeof msg\.kind === 'string'[\s\S]*?msg\.kind\.startsWith\('input'\)/);
+
+  const transcriptEl = {
+    textContent: 'placeholder',
+    scrollHeight: 100,
+    scrollTop: 0,
+    classList: { remove() {} },
+  };
+  const displayed = vm.runInNewContext(`
+    const MAX_LIVE_TRANSCRIPT_CHARS = 24_000;
+    let transcriptStarted = false;
+    let committedTranscript = '';
+    let interimTranscript = '';
+    ${boundedText}
+    ${updateSpeakerTranscript}
+    const snapshots = [];
+    updateSpeakerTranscript('input-interim', 'The quick');
+    snapshots.push(transcriptEl.textContent);
+    updateSpeakerTranscript('input-interim', 'The quick brown fox');
+    snapshots.push(transcriptEl.textContent);
+    updateSpeakerTranscript('input-final', 'The quick brown fox.');
+    snapshots.push(transcriptEl.textContent);
+    updateSpeakerTranscript('input-interim', ' Next thought');
+    snapshots.push(transcriptEl.textContent);
+    snapshots;
+  `, { transcriptEl });
+
+  assert.deepEqual(Array.from(displayed), [
+    'The quick',
+    'The quick brown fox',
+    'The quick brown fox.',
+    'The quick brown fox. Next thought',
+  ]);
+});
+
 test('speaker page stops instead of reviving a session after the two-hour limit', () => {
   assert.match(
     speakHtml,

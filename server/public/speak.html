@@ -300,12 +300,10 @@ micSel.onchange = () => {
 
 if (navigator.mediaDevices) navigator.mediaDevices.ondevicechange = populateMics;
 
-function appendBoundedText(el, text, maxChars) {
-  el.textContent += text;
-  if (el.textContent.length > maxChars) {
-    el.textContent = el.textContent.slice(-maxChars).replace(/^\S*\s?/, '');
-  }
-  el.scrollTop = el.scrollHeight;
+function boundedText(text, maxChars) {
+  return text.length > maxChars
+    ? text.slice(-maxChars).replace(/^\S*\s?/, '')
+    : text;
 }
 
 function setStatus(state) {
@@ -330,10 +328,30 @@ let sentAudioChunks = 0;
 let droppedAudioChunks = 0;
 let peakSpeakerBufferedBytes = 0;
 let transcriptStarted = false;
+let committedTranscript = '';
+let interimTranscript = '';
 let speakerClaimed = false;
 let claimResolver = null;
 let claimTimer = null;
 const SPEAKER_CLAIM_TIMEOUT_MS = 10_000;
+
+function updateSpeakerTranscript(kind, text) {
+  if (!transcriptStarted) {
+    transcriptEl.classList.remove('placeholder');
+    transcriptStarted = true;
+  }
+  if (kind === 'input-interim') {
+    interimTranscript = text;
+  } else {
+    committedTranscript = boundedText(committedTranscript + text, MAX_LIVE_TRANSCRIPT_CHARS);
+    interimTranscript = '';
+  }
+  transcriptEl.textContent = boundedText(
+    committedTranscript + interimTranscript,
+    MAX_LIVE_TRANSCRIPT_CHARS,
+  );
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
 
 function maybeReportAudioStats(force = false) {
   const now = Date.now();
@@ -524,9 +542,12 @@ function connectWs() {
         chip.textContent = `${l} · ${n}`;
         chipsEl.appendChild(chip);
       }
-    } else if (msg.type === 'transcript' && msg.kind === 'input') {
-      if (!transcriptStarted) { transcriptEl.textContent = ''; transcriptEl.classList.remove('placeholder'); transcriptStarted = true; }
-      appendBoundedText(transcriptEl, msg.text, MAX_LIVE_TRANSCRIPT_CHARS);
+    } else if (
+      msg.type === 'transcript'
+      && typeof msg.kind === 'string'
+      && msg.kind.startsWith('input')
+    ) {
+      updateSpeakerTranscript(msg.kind, msg.text);
     } else if (msg.type === 'status' && msg.state === 'transcript-stalled') {
       if (running) setStatus('transcript-stalled');
     } else if (msg.type === 'status' && msg.state === 'transcript-reconnecting') {

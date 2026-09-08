@@ -376,7 +376,7 @@ class Session {
     return !this.speakerTranscriptTranslator?.ready;
   }
 
-  receiveSpeakerTranscript(text) {
+  receiveSpeakerTranscript(text, kind = 'input') {
     if (this.speakerTranscriptRecoveryStartedAt !== null) {
       logAudioMetric({
         event: 'transcript-recovered',
@@ -388,7 +388,7 @@ class Session {
       this.speakerTranscriptRecoveryStartedAt = null;
     }
     this.speakerTranscriptWatchdog.recordTranscript();
-    this.sendToSpeaker({ type: 'transcript', kind: 'input', text });
+    this.sendToSpeaker({ type: 'transcript', kind, text });
   }
 
   #activeTranscriptChannel() {
@@ -406,8 +406,8 @@ class Session {
       echoTargetLanguage: false,
       onAudio: () => {},
       onTranscript: (kind, text) => {
-        if (kind === 'input' && this.speakerTranscriptTranslator === translator) {
-          this.receiveSpeakerTranscript(text);
+        if (kind.startsWith('input') && this.speakerTranscriptTranslator === translator) {
+          this.receiveSpeakerTranscript(text, kind);
         }
       },
       onError: (err) => this.sendToSpeaker({ type: 'error', message: err.message }),
