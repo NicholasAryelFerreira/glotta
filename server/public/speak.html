@@ -562,6 +562,7 @@ function connectWs() {
         releaseSpeakerClaim();
         return;
       }
+      errEl.textContent = '';
       if (running) setStatus('live');
     } else if (msg.type === 'error') {
       if (msg.code === 'speaker-busy') {

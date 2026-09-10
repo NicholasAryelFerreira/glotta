@@ -26,6 +26,13 @@ test('speaker page reports voiced audio and shows transcript recovery states', (
   assert.match(speakHtml, /msg\.state === 'transcript-online'/);
 });
 
+test('speaker page clears a stale connection error after reclaiming the audio input', () => {
+  assert.match(
+    speakHtml,
+    /msg\.type === 'speaker-claim' && msg\.state === 'granted'[\s\S]*?if \(!claimExpected\)[\s\S]*?return;\s*\}\s*errEl\.textContent = '';\s*if \(running\) setStatus\('live'\);/,
+  );
+});
+
 test('speaker page replaces interim transcription and commits finalized text', () => {
   const boundedText = inlineScript.match(/function boundedText[\s\S]*?\n\}/)?.[0];
   const updateSpeakerTranscript = inlineScript.match(
