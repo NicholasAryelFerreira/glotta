@@ -16,7 +16,7 @@ test('listener loads only the selected provider target languages', () => {
   assert.match(joinHtml, /sess\.provider \|\| 'gemini'/);
 });
 
-test('listener can choose a language while waiting for the weekly session', () => {
+test('listener can choose a language while waiting for any valid session', () => {
   const checkSession = joinHtml.match(/async function checkSession\(\) \{([\s\S]*?)\n\}/)?.[1];
   assert.ok(checkSession, 'expected checkSession');
   assert.match(checkSession, /await loadLanguages\('gemini'\);\s*langSel\.disabled = false;/);
@@ -29,6 +29,7 @@ test('listener can choose a language while waiting for the weekly session', () =
     /if \(!sessionReady\) \{[\s\S]*?waitNote\.style\.display = '';[\s\S]*?toggleBtn\.disabled = true;/,
   );
   assert.match(joinHtml, /langSel\.onchange = \(\) => \{ toggleBtn\.disabled = !langSel\.value \|\| !sessionReady; \};/);
+  assert.doesNotMatch(checkSession, /isWeeklySession|SERMON/);
 });
 
 test('listener starts with the language placeholder and preserves only a choice made on this page', () => {
@@ -47,7 +48,7 @@ test('audio recovery is bounded and replaces a stale listener socket', () => {
   assert.match(joinHtml, /const AUDIO_SETUP_TIMEOUT_MS = 5_000;/);
   assert.match(joinHtml, /async function resumeListening\(\)[\s\S]*?replaceListenerSocket\(\);/);
   assert.match(joinHtml, /window\.addEventListener\('online',[\s\S]*?replaceListenerSocket\(\);/);
-  assert.match(joinHtml, /finally \{\s*audioSetupPending = false;\s*toggleBtn\.disabled = false;/);
+  assert.match(joinHtml, /finally \{\s*audioSetupPending = false;\s*toggleBtn\.disabled = !sessionReady;/);
 });
 
 test('audio context is created before setup awaits to preserve mobile user activation', () => {
@@ -80,4 +81,14 @@ test('listener distinguishes a paused speaker from reconnecting and translation 
   assert.match(joinHtml, /msg\.state === 'speaker-paused'[\s\S]*?Speaker paused/);
   assert.match(joinHtml, /msg\.state === 'speaker-offline'[\s\S]*?Speaker reconnecting\.\.\./);
   assert.match(joinHtml, /msg\.state === 'translation-stalled'[\s\S]*?Translation stalled — reconnecting\.\.\./);
+});
+
+test('ended sessions keep the listen button disabled', () => {
+  assert.match(
+    joinHtml,
+    /msg\.state === 'ended'\) \{\s*sessionReady = false;[\s\S]*?stop\(false\);/,
+  );
+  const stop = joinHtml.match(/function stop\(closeWs = true\) \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(stop, 'expected stop');
+  assert.match(stop, /statusEl\.querySelector\('\.off'\)[\s\S]*?toggleBtn\.disabled = true;/);
 });

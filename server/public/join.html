@@ -15,6 +15,7 @@
   .session-title { font-size: 24px; font-weight: 700; text-align: center; margin: 0; }
   .session-sub { color: var(--faint); font-size: 13px; text-align: center; margin: 0; letter-spacing: 0.3px; }
   .listen-card { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
+  #lang { direction: ltr; text-align: left; }
   .listen-instr { font-size: 13px; color: var(--muted); text-align: center; margin: 0 0 2px; }
   .listen-options { font-size: 12px; line-height: 1.45; color: var(--muted); text-align: center; margin: -3px 4px 0; }
   .service-times { font-size: 14px; font-weight: 700; color: var(--ink); text-align: center; margin: 0; }
@@ -116,8 +117,8 @@ function setStatus(kind, text) {
   }
 }
 
-// The printed weekly QR is scanned before the speaker goes live, so a missing
-// session isn't an error: wait politely and keep checking until it starts.
+// A join link may be opened before the speaker goes live, so a missing session
+// isn't an error: wait politely and keep checking until it starts.
 const SESSION_POLL_MS = 5000;
 const waitNote = document.getElementById('waitNote');
 let sessionReady = false;
@@ -412,7 +413,11 @@ function connect() {
         if (!audioNeedsTap) setStatus('offline', 'Translation reconnecting...');
       }
       if (msg.state === 'translator-online' && !audioNeedsTap) setStatus('listening', 'Listening');
-      if (msg.state === 'ended') { setStatus('ended', 'The session has ended'); stop(false); }
+      if (msg.state === 'ended') {
+        sessionReady = false;
+        setStatus('ended', 'The session has ended');
+        stop(false);
+      }
     } else if (msg.type === 'error') {
       errEl.textContent = msg.message;
     }
@@ -450,7 +455,7 @@ async function start() {
     errEl.textContent = 'Your browser did not start audio. Tap to listen and try again.';
   } finally {
     audioSetupPending = false;
-    toggleBtn.disabled = false;
+    toggleBtn.disabled = !sessionReady;
   }
 }
 
@@ -479,7 +484,7 @@ async function resumeListening() {
     errEl.textContent = 'Audio restart did not finish. Tap the button again to retry.';
   } finally {
     audioSetupPending = false;
-    toggleBtn.disabled = false;
+    toggleBtn.disabled = !sessionReady;
   }
 }
 
@@ -495,7 +500,10 @@ function stop(closeWs = true) {
   toggleLabel.textContent = 'Tap to listen';
   toggleBtn.classList.remove('btn-live');
   toggleBtn.classList.add('btn-accent');
-  if (statusEl.querySelector('.off')) return; // keep "ended" message
+  if (statusEl.querySelector('.off')) {
+    toggleBtn.disabled = true;
+    return; // keep "ended" message and prevent reconnecting to the closed session
+  }
   setStatus('hidden');
 }
 
