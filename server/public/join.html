@@ -86,7 +86,6 @@ const captionsEl = document.getElementById('captions');
 const errEl = document.getElementById('err');
 const serviceTimes = document.getElementById('serviceTimes');
 
-const LANG_KEY = 'glotta.lang';
 let listenerMaxBufferSeconds = 4;
 
 // The reusable Sunday link may be opened before its session exists, so use the
@@ -129,7 +128,7 @@ async function loadLanguages(provider) {
   const langRes = await fetch(`/api/languages?provider=${encodeURIComponent(provider)}`);
   if (!langRes.ok) throw new Error('Could not load languages');
   const { languages } = await langRes.json();
-  const saved = localStorage.getItem(LANG_KEY);
+  const selected = langSel.value;
   langSel.innerHTML = '<option value="">Choose your language…</option>';
   languages.sort((a, b) => a.name.localeCompare(b.name));
   for (const language of languages) {
@@ -140,8 +139,8 @@ async function loadLanguages(provider) {
       : `${language.name} (${language.native})`;
     langSel.appendChild(option);
   }
-  if (saved && [...langSel.options].some((option) => option.value === saved)) {
-    langSel.value = saved;
+  if (selected && [...langSel.options].some((option) => option.value === selected)) {
+    langSel.value = selected;
   }
   loadedProvider = provider;
 }
@@ -438,7 +437,6 @@ async function start() {
   try {
     // The context is created inside this tap handler for mobile Safari.
     await createAudioPlayer();
-    localStorage.setItem(LANG_KEY, langSel.value);
     listening = true;
     audioNeedsTap = false;
     langSel.disabled = true;

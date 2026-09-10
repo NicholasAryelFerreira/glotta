@@ -31,6 +31,12 @@ test('listener can choose a language while waiting for the weekly session', () =
   assert.match(joinHtml, /langSel\.onchange = \(\) => \{ toggleBtn\.disabled = !langSel\.value \|\| !sessionReady; \};/);
 });
 
+test('listener starts with the language placeholder and preserves only a choice made on this page', () => {
+  assert.match(joinHtml, /const selected = langSel\.value;/);
+  assert.match(joinHtml, /if \(selected && \[\.\.\.langSel\.options\][\s\S]*?langSel\.value = selected;/);
+  assert.doesNotMatch(joinHtml, /glotta\.lang|localStorage\.(?:getItem|setItem)\(LANG_KEY/);
+});
+
 test('listener UI hides provider details and gives three discreet listening options', () => {
   assert.doesNotMatch(joinHtml, /Google Gemini|OpenAI GPT/);
   assert.match(joinHtml, /Hold your phone to your ear, use headphones, or read the captions silently\./);
