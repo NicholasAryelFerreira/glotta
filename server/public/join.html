@@ -88,6 +88,7 @@ const errEl = document.getElementById('err');
 const serviceTimes = document.getElementById('serviceTimes');
 
 let listenerMaxBufferSeconds = 4;
+let isWeeklySession = sessionId.toUpperCase() === 'SERMON';
 
 // The reusable Sunday link may be opened before its session exists, so use the
 // fixed code from public config instead of relying on the live session lookup.
@@ -95,12 +96,13 @@ const publicConfigReady = Promise.race([
   fetch('/api/config')
     .then((r) => r.json())
     .then((config) => {
-      const isWeeklySession = config.weeklySessionId === sessionId.toUpperCase();
+      isWeeklySession = config.weeklySessionId === sessionId.toUpperCase();
       serviceTimes.hidden = !isWeeklySession;
       const configuredMax = Number(config.listenerMaxBufferSeconds);
       if (Number.isFinite(configuredMax) && configuredMax > 0) {
         listenerMaxBufferSeconds = configuredMax;
       }
+      if (waitNote.style.display !== 'none') showWaitingForStart();
     })
     .catch(() => { serviceTimes.hidden = true; }),
   new Promise((resolve) => setTimeout(resolve, 3_000)),
@@ -146,6 +148,17 @@ async function loadLanguages(provider) {
   loadedProvider = provider;
 }
 
+function showWaitingForStart() {
+  waitNote.textContent = isWeeklySession
+    ? "The service hasn't started yet. Keep this page open — it will connect automatically once the speaker goes live."
+    : "This session hasn't started yet. Keep this page open — it will connect automatically once the speaker goes live.";
+  waitNote.style.display = '';
+  setStatus(
+    'offline',
+    isWeeklySession ? 'Waiting for the service to start' : 'Waiting for the session to start',
+  );
+}
+
 async function checkSession() {
   let res = null;
   try { res = await fetch(`/api/sessions/${sessionId}`); } catch { /* offline — retry below */ }
@@ -165,8 +178,7 @@ async function checkSession() {
     document.getElementById('title').textContent = sess.title;
     document.getElementById('sessionInfo').textContent = `Session ${sess.sessionId}`;
     if (!sessionReady) {
-      waitNote.style.display = '';
-      setStatus('offline', 'Waiting for the service to start');
+      showWaitingForStart();
       toggleBtn.disabled = true;
       setTimeout(checkSession, SESSION_POLL_MS);
       return;
@@ -190,8 +202,7 @@ async function checkSession() {
     return;
   }
   document.getElementById('sessionInfo').textContent = `Session ${sessionId.toUpperCase()}`;
-  waitNote.style.display = '';
-  setStatus('offline', 'Waiting for the service to start');
+  showWaitingForStart();
   setTimeout(checkSession, SESSION_POLL_MS);
 }
 

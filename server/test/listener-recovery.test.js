@@ -26,10 +26,18 @@ test('listener can choose a language while waiting for any valid session', () =>
   );
   assert.match(
     checkSession,
-    /if \(!sessionReady\) \{[\s\S]*?waitNote\.style\.display = '';[\s\S]*?toggleBtn\.disabled = true;/,
+    /if \(!sessionReady\) \{[\s\S]*?showWaitingForStart\(\);[\s\S]*?toggleBtn\.disabled = true;/,
   );
   assert.match(joinHtml, /langSel\.onchange = \(\) => \{ toggleBtn\.disabled = !langSel\.value \|\| !sessionReady; \};/);
   assert.doesNotMatch(checkSession, /isWeeklySession|SERMON/);
+});
+
+test('listener keeps service wording for SERMON and uses session wording for other codes', () => {
+  assert.match(joinHtml, /isWeeklySession = sessionId\.toUpperCase\(\) === 'SERMON';/);
+  assert.match(joinHtml, /isWeeklySession = config\.weeklySessionId === sessionId\.toUpperCase\(\);/);
+  assert.match(joinHtml, /isWeeklySession \? 'Waiting for the service to start' : 'Waiting for the session to start'/);
+  assert.match(joinHtml, /The service hasn't started yet\./);
+  assert.match(joinHtml, /This session hasn't started yet\./);
 });
 
 test('listener starts with the language placeholder and preserves only a choice made on this page', () => {
