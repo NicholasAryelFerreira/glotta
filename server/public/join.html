@@ -160,10 +160,17 @@ async function checkSession() {
       setTimeout(checkSession, SESSION_POLL_MS);
       return;
     }
-    sessionReady = true;
+    sessionReady = Boolean(sess.speakerOnline);
     langSel.disabled = false;
     document.getElementById('title').textContent = sess.title;
     document.getElementById('sessionInfo').textContent = `Session ${sess.sessionId}`;
+    if (!sessionReady) {
+      waitNote.style.display = '';
+      setStatus('offline', 'Waiting for the service to start');
+      toggleBtn.disabled = true;
+      setTimeout(checkSession, SESSION_POLL_MS);
+      return;
+    }
     waitNote.style.display = 'none';
     setStatus('hidden');
     toggleBtn.disabled = !langSel.value;
@@ -171,6 +178,15 @@ async function checkSession() {
   }
   if (!/^[a-z0-9]{6}$/i.test(sessionId)) {
     errEl.textContent = 'This link looks wrong. Ask for a new QR code.';
+    return;
+  }
+  try {
+    await loadLanguages('gemini');
+    langSel.disabled = false;
+  } catch {
+    langSel.disabled = true;
+    setStatus('offline', 'Loading available languages…');
+    setTimeout(checkSession, SESSION_POLL_MS);
     return;
   }
   document.getElementById('sessionInfo').textContent = `Session ${sessionId.toUpperCase()}`;

@@ -16,6 +16,21 @@ test('listener loads only the selected provider target languages', () => {
   assert.match(joinHtml, /sess\.provider \|\| 'gemini'/);
 });
 
+test('listener can choose a language while waiting for the weekly session', () => {
+  const checkSession = joinHtml.match(/async function checkSession\(\) \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(checkSession, 'expected checkSession');
+  assert.match(checkSession, /await loadLanguages\('gemini'\);\s*langSel\.disabled = false;/);
+  assert.match(
+    checkSession,
+    /sessionReady = Boolean\(sess\.speakerOnline\);\s*langSel\.disabled = false;/,
+  );
+  assert.match(
+    checkSession,
+    /if \(!sessionReady\) \{[\s\S]*?waitNote\.style\.display = '';[\s\S]*?toggleBtn\.disabled = true;/,
+  );
+  assert.match(joinHtml, /langSel\.onchange = \(\) => \{ toggleBtn\.disabled = !langSel\.value \|\| !sessionReady; \};/);
+});
+
 test('listener UI hides provider details and gives three discreet listening options', () => {
   assert.doesNotMatch(joinHtml, /Google Gemini|OpenAI GPT/);
   assert.match(joinHtml, /Hold your phone to your ear, use headphones, or read the captions silently\./);
