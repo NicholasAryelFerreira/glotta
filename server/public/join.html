@@ -547,7 +547,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('offline', () => {
   if (!listening) return;
   clearScheduledAudio();
-  if (!audioNeedsTap) setStatus('offline', 'Network changed — waiting for connection');
+  if (!audioNeedsTap) setStatus('offline', 'No internet connection. Waiting to reconnect…');
 });
 
 window.addEventListener('online', () => {
