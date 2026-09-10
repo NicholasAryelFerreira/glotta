@@ -20,6 +20,7 @@
   .listen-options { font-size: 12px; line-height: 1.45; color: var(--muted); text-align: center; margin: -3px 4px 0; }
   .service-times { font-size: 14px; font-weight: 700; color: var(--ink); text-align: center; margin: 0; }
   .listen-btn { font-size: 18px; padding: 18px; }
+  .listen-btn.session-ended { transition: none; }
   .captions-card { width: 100%; }
   .captions-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
     color: var(--faint); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 10px; }
@@ -427,6 +428,7 @@ function connect() {
       if (msg.state === 'ended') {
         sessionReady = false;
         setStatus('ended', 'The session has ended');
+        toggleBtn.classList.add('session-ended');
         stop(false);
       }
     } else if (msg.type === 'error') {

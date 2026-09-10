@@ -94,8 +94,9 @@ test('listener distinguishes a paused speaker from reconnecting and translation 
 test('ended sessions keep the listen button disabled', () => {
   assert.match(
     joinHtml,
-    /msg\.state === 'ended'\) \{\s*sessionReady = false;[\s\S]*?stop\(false\);/,
+    /msg\.state === 'ended'\) \{\s*sessionReady = false;[\s\S]*?classList\.add\('session-ended'\);\s*stop\(false\);/,
   );
+  assert.match(joinHtml, /\.listen-btn\.session-ended \{ transition: none; \}/);
   const stop = joinHtml.match(/function stop\(closeWs = true\) \{([\s\S]*?)\n\}/)?.[1];
   assert.ok(stop, 'expected stop');
   assert.match(stop, /statusEl\.querySelector\('\.off'\)[\s\S]*?toggleBtn\.disabled = true;/);
