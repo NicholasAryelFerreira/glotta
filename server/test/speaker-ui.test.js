@@ -6,9 +6,10 @@ import vm from 'node:vm';
 const speakHtml = await readFile(new URL('../public/speak.html', import.meta.url), 'utf8');
 const inlineScript = speakHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 
-test('speaker page omits the redundant listener-total message', () => {
+test('speaker page shows only languages with active listeners', () => {
   assert.doesNotMatch(speakHtml, /No listeners yet/);
   assert.doesNotMatch(speakHtml, /id="stats"/);
+  assert.match(speakHtml, /if \(n <= 0\) continue;/);
   assert.match(speakHtml, /chip\.textContent = `\$\{l\} · \$\{n\}`/);
 });
 

@@ -537,6 +537,7 @@ function connectWs() {
     if (msg.type === 'stats') {
       chipsEl.innerHTML = '';
       for (const [l, n] of Object.entries(msg.listeners)) {
+        if (n <= 0) continue;
         const chip = document.createElement('span');
         chip.className = 'chip';
         chip.textContent = `${l} · ${n}`;
