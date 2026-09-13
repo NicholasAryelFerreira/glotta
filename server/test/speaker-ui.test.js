@@ -6,6 +6,38 @@ import vm from 'node:vm';
 const speakHtml = await readFile(new URL('../public/speak.html', import.meta.url), 'utf8');
 const inlineScript = speakHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 
+test('returning to the speaker page resumes suspended capture but respects Stop and hidden pages', async () => {
+  const recover = inlineScript.match(/function recoverInterruptedCapture\(\)[\s\S]*?\n\}/)[0];
+  let resumed = 0;
+  let restarted = 0;
+  const audioCtx = { state: 'suspended', resume: async () => { resumed++; audioCtx.state = 'running'; } };
+  const context = {
+    running: true, startPending: false, pageActive: true, speakerClaimed: true,
+    document: { visibilityState: 'visible' }, audioCtx,
+    mediaStream: { getAudioTracks: () => [{ readyState: 'live' }] },
+    errEl: {}, setStatus() {}, stop() {}, start() { restarted++; },
+  };
+  vm.runInNewContext(`${recover}; recoverInterruptedCapture();`, context);
+  await Promise.resolve();
+  assert.equal(resumed, 1);
+  assert.equal(restarted, 0);
+  context.running = false;
+  audioCtx.state = 'suspended';
+  vm.runInNewContext(`${recover}; recoverInterruptedCapture();`, context);
+  assert.equal(resumed, 1);
+  context.running = true;
+  context.document.visibilityState = 'hidden';
+  vm.runInNewContext(`${recover}; recoverInterruptedCapture();`, context);
+  assert.equal(resumed, 1);
+  context.document.visibilityState = 'visible';
+  context.mediaStream = { getAudioTracks: () => [{ readyState: 'ended' }] };
+  vm.runInNewContext(`${recover}; recoverInterruptedCapture();`, context);
+  assert.equal(restarted, 1);
+  context.pageActive = false;
+  vm.runInNewContext(`${recover}; recoverInterruptedCapture();`, context);
+  assert.equal(restarted, 1);
+});
+
 test('loading either session type starts capture after restoring the microphone selection', async () => {
   const loadSession = inlineScript.match(/async function loadSession\(\)[\s\S]*?\n\}/)[0];
   for (const sessionId of ['SERMON', 'ABC123']) {

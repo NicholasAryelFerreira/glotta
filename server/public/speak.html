@@ -667,6 +667,10 @@ async function start() {
     };
     source.connect(workletNode);
     running = true;
+    audioCtx.onstatechange = recoverInterruptedCapture;
+    for (const track of mediaStream.getAudioTracks()) {
+      track.onended = recoverInterruptedCapture;
+    }
     setAudioMeterVisible(true);
     toggleLabel.textContent = 'Stop speaking';
     toggleBtn.classList.remove('btn-accent');
@@ -688,7 +692,7 @@ function stop(releaseClaim = true) {
   if (releaseClaim) releaseSpeakerClaim();
   if (workletNode) workletNode.disconnect();
   if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
-  if (audioCtx) audioCtx.close();
+  if (audioCtx) { audioCtx.onstatechange = null; audioCtx.close().catch(() => {}); }
   workletNode = mediaStream = audioCtx = null;
   micSel.disabled = false;
   setAudioMeterVisible(false);
@@ -698,6 +702,35 @@ function stop(releaseClaim = true) {
   toggleBtn.classList.add('btn-accent');
   setStatus('paused');
 }
+
+function recoverInterruptedCapture() {
+  // `running` stays true through browser suspension, but Stop speaking clears
+  // it. Returning to the page must never undo an intentional stop.
+  if (!running || startPending || !pageActive || document.visibilityState === 'hidden') return;
+  const context = audioCtx;
+  const tracks = mediaStream?.getAudioTracks() || [];
+  if (!context || context.state === 'closed' || !tracks.length || tracks.some(t => t.readyState === 'ended')) {
+    stop(false);
+    void start();
+    return;
+  }
+  if (context.state === 'running') return;
+  setStatus('connecting');
+  errEl.textContent = 'Audio paused by the browser — tap the page if it does not resume.';
+  context.resume().then(() => {
+    if (!running || !pageActive || audioCtx !== context || context.state !== 'running') return;
+    errEl.textContent = '';
+    setStatus(speakerClaimed ? 'live' : 'connecting');
+  }).catch(() => {});
+}
+
+document.addEventListener('visibilitychange', recoverInterruptedCapture);
+window.addEventListener('pageshow', recoverInterruptedCapture);
+window.addEventListener('focus', recoverInterruptedCapture);
+document.addEventListener('pointerdown', (event) => {
+  if (toggleBtn.contains(event.target) || document.getElementById('endBtn').contains(event.target)) return;
+  recoverInterruptedCapture();
+});
 
 toggleBtn.onclick = () => (running ? stop() : start());
 

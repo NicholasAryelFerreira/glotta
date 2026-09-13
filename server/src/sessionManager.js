@@ -356,6 +356,7 @@ class Session {
     if (this.speakerWs !== ws) return false;
     this.speakerWs = null;
     this.clearSpeakerAudioMonitor();
+    this.pauseSpeakerTranscript();
     this.speakerTranscriptWatchdog.reset();
     return true;
   }
@@ -364,6 +365,15 @@ class Session {
     if (this.speakerAudioMonitorTimer) clearTimeout(this.speakerAudioMonitorTimer);
     this.speakerAudioMonitorTimer = null;
     this.speakerAudioMissing = false;
+  }
+
+  pauseSpeakerTranscript() {
+    const translator = this.speakerTranscriptTranslator;
+    this.speakerTranscriptTranslator = null;
+    this.speakerTranscriptWatchdog.reset();
+    this.speakerTranscriptRestarting = false;
+    this.speakerTranscriptRecoveryStartedAt = null;
+    translator?.close();
   }
 
   // Observe packet arrival, including silent audio. This deliberately does not
@@ -379,6 +389,7 @@ class Session {
         return;
       }
       this.speakerAudioMissing = true;
+      this.pauseSpeakerTranscript();
       logAudioMetric({
         event: 'speaker-audio-missing', sessionId: this.id,
         provider: this.provider, missingForMs,
@@ -439,8 +450,13 @@ class Session {
           this.receiveSpeakerTranscript(text, kind);
         }
       },
-      onError: (err) => this.sendToSpeaker({ type: 'error', message: err.message }),
+      onError: (err) => {
+        if (this.speakerTranscriptTranslator === translator) {
+          this.sendToSpeaker({ type: 'error', message: err.message });
+        }
+      },
       onStatus: (state) => {
+        if (this.speakerTranscriptTranslator !== translator) return;
         if (state === 'translator-reconnecting') {
           this.sendToSpeaker({ type: 'status', state: 'transcript-reconnecting' });
           return;

@@ -23,19 +23,26 @@ function fakeSpeakerSocket() {
   };
 }
 
-test('missing audio telemetry observes packet loss once and recovery without changing capture', (context) => {
+test('missing audio pauses only the English stream and reopens it when packets return', (context) => {
   context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   const lines = [];
   context.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
   const manager = new SessionManager('test-key');
   const session = manager.create({ id: 'CAP001' });
   const speaker = fakeSpeakerSocket();
-  const translator = { ready: true, sendAudio() {}, close() {} };
+  let closed = 0;
+  let reopened = 0;
+  const translator = { ready: true, sendAudio() {}, close() { closed++; } };
+  manager.createTranscriptStream = () => {
+    reopened++;
+    return { ready: true, sendAudio() {}, close() {}, connect: async () => {} };
+  };
   session.speakerTranscriptTranslator = translator;
   session.claimSpeaker(speaker);
   // Waiting for the initial permission prompt is not capture loss.
   context.mock.timers.tick(30_000);
   assert.equal(lines.filter(l => l.includes('speaker-audio-missing')).length, 0);
+  assert.equal(closed, 0);
   for (let i = 0; i < 4; i++) {
     session.pushAudio('AAAA', { speechDetected: false });
     context.mock.timers.tick(10_000);
@@ -45,13 +52,17 @@ test('missing audio telemetry observes packet loss once and recovery without cha
   context.mock.timers.tick(30_000);
   assert.equal(lines.filter(l => l.includes('speaker-audio-missing')).length, 1);
   assert.equal(session.speakerWs, speaker);
-  assert.equal(session.speakerTranscriptTranslator, translator);
+  assert.equal(session.speakerTranscriptTranslator, null);
+  assert.equal(closed, 1);
+  assert.equal(reopened, 0);
   assert.equal(speaker.sent.length, 0);
   session.pushAudio('AAAA', { speechDetected: false });
+  assert.equal(reopened, 1);
   assert.equal(lines.filter(l => l.includes('speaker-audio-restored')).length, 1);
   session.pushAudio('AAAA', { speechDetected: false });
   assert.equal(lines.filter(l => l.includes('speaker-audio-restored')).length, 1);
   session.releaseSpeaker(speaker);
+  assert.equal(session.speakerTranscriptTranslator, null);
   context.mock.timers.tick(30_000);
   assert.equal(lines.filter(l => l.includes('speaker-audio-missing')).length, 1);
   session.claimSpeaker(speaker);
