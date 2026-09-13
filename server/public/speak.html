@@ -609,7 +609,8 @@ let lastCaptureAt = 0, healthyCaptureSince = 0;
 let recoveryAttempts = 0, nextRecoveryAt = 0, recoveryPending = false;
 let captureNeedsTap = false;
 const CAPTURE_STALL_MS = 10_000;
-const CAPTURE_RECOVERY_LIMIT = 3;
+const CAPTURE_FAST_RECOVERY_ATTEMPTS = 3;
+const CAPTURE_SLOW_RECOVERY_MS = 60_000;
 
 function withCaptureTimeout(promise, ms, message) {
   let timer;
@@ -694,7 +695,8 @@ async function start(automatic = false) {
   } catch (e) {
     if (!current()) return;
     captureNeedsTap = e.name === 'NotAllowedError' || /Tap to resume|Microphone setup timed out/.test(e.message);
-    nextRecoveryAt = Date.now() + 5_000;
+    nextRecoveryAt = Date.now() + (recoveryAttempts >= CAPTURE_FAST_RECOVERY_ATTEMPTS
+      ? CAPTURE_SLOW_RECOVERY_MS : 5_000);
     releaseSpeakerClaim();
     setStatus('paused');
     errEl.textContent = captureNeedsTap
@@ -740,14 +742,12 @@ async function recoverInterruptedCapture() {
     && tracks.every(t => t.readyState === 'live') && Date.now() - lastCaptureAt < CAPTURE_STALL_MS;
   if (healthy) return;
   if (Date.now() < nextRecoveryAt) return;
-  if (recoveryAttempts >= CAPTURE_RECOVERY_LIMIT) {
-    captureNeedsTap = true;
-    errEl.textContent = 'Tap to resume audio.';
-    return;
-  }
   recoveryPending = true;
   recoveryAttempts++;
-  nextRecoveryAt = Date.now() + 5_000;
+  // After the initial attempts, keep waiting and retry gently. Missing data
+  // alone must never turn into a permanent requirement to tap the page.
+  nextRecoveryAt = Date.now() + (recoveryAttempts >= CAPTURE_FAST_RECOVERY_ATTEMPTS
+    ? CAPTURE_SLOW_RECOVERY_MS : 5_000);
   const generation = captureGeneration;
   try {
     const context = audioCtx;

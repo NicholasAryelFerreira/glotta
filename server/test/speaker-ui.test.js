@@ -147,7 +147,7 @@ function captureHarness(t) {
 
 async function flushCapturePromises() { for (let i = 0; i < 25; i++) await Promise.resolve(); }
 
-test('silent audio stays healthy; missing chunks recover with a bounded retry budget', async t => {
+test('silent audio stays healthy; missing chunks keep retrying slowly without requiring a tap', async t => {
   const h = captureHarness(t);
   await h.run('start()');
   for (let i = 0; i < 120; i++) {
@@ -160,12 +160,29 @@ test('silent audio stays healthy; missing chunks recover with a bounded retry bu
     t.mock.timers.tick(10_000);
     await h.run('recoverInterruptedCapture()');
   }
-  assert.equal(h.counts().starts, 4, 'only three automatic rebuilds');
-  assert.equal(h.run('captureNeedsTap'), true);
+  assert.equal(h.counts().starts, 4, 'only three quick automatic rebuilds');
+  assert.equal(h.run('captureNeedsTap'), false);
+  for (let i = 0; i < 20; i++) {
+    const before = h.counts().starts;
+    t.mock.timers.tick(60_000);
+    await h.run('recoverInterruptedCapture()');
+    assert.equal(h.counts().starts, before + 1);
+    await h.run('recoverInterruptedCapture()');
+    assert.equal(h.counts().starts, before + 1, 'no rapid retry loop');
+  }
+  assert.equal(h.run('speakingIntended && !captureNeedsTap'), true);
+  const beforeAudio = h.counts().starts;
+  for (let i = 0; i < 35; i++) {
+    t.mock.timers.tick(1_000);
+    h.frame();
+    await h.run('recoverInterruptedCapture()');
+  }
+  assert.equal(h.counts().starts, beforeAudio, 'returning data needs no tap or restart');
+  assert.equal(h.run('recoveryAttempts'), 0);
   h.run('stop()');
   t.mock.timers.tick(30_000);
   await h.run('recoverInterruptedCapture()');
-  assert.equal(h.counts().starts, 4);
+  assert.equal(h.counts().starts, beforeAudio);
   assert.equal(h.run('speakingIntended'), false);
 });
 
