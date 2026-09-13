@@ -287,6 +287,8 @@ class Session {
     this.speakerTranscriptRecoveryStartedAt = null;
     this.ended = false;
     this.lastAudioAt = Date.now();
+    this.speakerAudioMonitorTimer = null;
+    this.speakerAudioMissing = false;
     this.speakerIngressMetrics = {
       intervalStartedAt: Date.now(),
       receivedChunks: 0,
@@ -353,8 +355,35 @@ class Session {
   releaseSpeaker(ws) {
     if (this.speakerWs !== ws) return false;
     this.speakerWs = null;
+    this.clearSpeakerAudioMonitor();
     this.speakerTranscriptWatchdog.reset();
     return true;
+  }
+
+  clearSpeakerAudioMonitor() {
+    if (this.speakerAudioMonitorTimer) clearTimeout(this.speakerAudioMonitorTimer);
+    this.speakerAudioMonitorTimer = null;
+    this.speakerAudioMissing = false;
+  }
+
+  // Observe packet arrival, including silent audio. This deliberately does not
+  // restart capture, release the speaker, or send user-facing status messages.
+  scheduleSpeakerAudioMonitor(delay = 15_000) {
+    if (this.speakerAudioMonitorTimer || !this.speakerWs || this.ended) return;
+    this.speakerAudioMonitorTimer = setTimeout(() => {
+      this.speakerAudioMonitorTimer = null;
+      if (!this.speakerWs || this.ended) return;
+      const missingForMs = Date.now() - this.lastAudioAt;
+      if (missingForMs < 15_000) {
+        this.scheduleSpeakerAudioMonitor(15_000 - missingForMs);
+        return;
+      }
+      this.speakerAudioMissing = true;
+      logAudioMetric({
+        event: 'speaker-audio-missing', sessionId: this.id,
+        provider: this.provider, missingForMs,
+      });
+    }, delay);
   }
 
   sendToSpeakers(obj) {
@@ -435,7 +464,15 @@ class Session {
   /** Fan one base64 PCM chunk out to the transcript and active language translators. */
   pushAudio(base64Chunk, metadata = {}) {
     if (this.ended) return;
+    if (this.speakerAudioMissing) {
+      logAudioMetric({
+        event: 'speaker-audio-restored', sessionId: this.id,
+        provider: this.provider, missingForMs: Date.now() - this.lastAudioAt,
+      });
+      this.speakerAudioMissing = false;
+    }
     this.lastAudioAt = Date.now();
+    this.scheduleSpeakerAudioMonitor();
     this.#recordSpeakerIngress(metadata);
     this.ensureSpeakerTranscript();
     this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
@@ -688,6 +725,7 @@ class Session {
   end(reason = 'ended by speaker', speakerCloseReason = 'session ended') {
     if (this.ended) return;
     this.ended = true;
+    this.clearSpeakerAudioMonitor();
     if (this.audioIdleTimer) clearTimeout(this.audioIdleTimer);
     this.audioIdleTimer = null;
     if (this.maxDurationTimer) clearTimeout(this.maxDurationTimer);

@@ -297,7 +297,7 @@ function handleSpeaker(ws, session) {
       `(code: ${code}, connectedMs: ${Date.now() - connectedAt}, graceSeconds: ${SPEAKER_GRACE_MS / 1000})`,
     );
     broadcastToAll(session, { type: 'status', state: 'speaker-offline' });
-    session.speakerGraceTimer = setTimeout(() => session.end(), SPEAKER_GRACE_MS);
+    session.speakerGraceTimer = setTimeout(() => session.end('speaker disconnected for 5 minutes'), SPEAKER_GRACE_MS);
   });
 }
 

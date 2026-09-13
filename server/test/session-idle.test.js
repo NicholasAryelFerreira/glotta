@@ -23,6 +23,44 @@ function fakeSpeakerSocket() {
   };
 }
 
+test('missing audio telemetry observes packet loss once and recovery without changing capture', (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const lines = [];
+  context.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  const manager = new SessionManager('test-key');
+  const session = manager.create({ id: 'CAP001' });
+  const speaker = fakeSpeakerSocket();
+  const translator = { ready: true, sendAudio() {}, close() {} };
+  session.speakerTranscriptTranslator = translator;
+  session.claimSpeaker(speaker);
+  // Waiting for the initial permission prompt is not capture loss.
+  context.mock.timers.tick(30_000);
+  assert.equal(lines.filter(l => l.includes('speaker-audio-missing')).length, 0);
+  for (let i = 0; i < 4; i++) {
+    session.pushAudio('AAAA', { speechDetected: false });
+    context.mock.timers.tick(10_000);
+  }
+  assert.equal(lines.filter(l => l.includes('speaker-audio-missing')).length, 0);
+  context.mock.timers.tick(5_000);
+  context.mock.timers.tick(30_000);
+  assert.equal(lines.filter(l => l.includes('speaker-audio-missing')).length, 1);
+  assert.equal(session.speakerWs, speaker);
+  assert.equal(session.speakerTranscriptTranslator, translator);
+  assert.equal(speaker.sent.length, 0);
+  session.pushAudio('AAAA', { speechDetected: false });
+  assert.equal(lines.filter(l => l.includes('speaker-audio-restored')).length, 1);
+  session.pushAudio('AAAA', { speechDetected: false });
+  assert.equal(lines.filter(l => l.includes('speaker-audio-restored')).length, 1);
+  session.releaseSpeaker(speaker);
+  context.mock.timers.tick(30_000);
+  assert.equal(lines.filter(l => l.includes('speaker-audio-missing')).length, 1);
+  session.claimSpeaker(speaker);
+  session.pushAudio('AAAA', { speechDetected: false });
+  session.end('test complete');
+  context.mock.timers.tick(30_000);
+  assert.equal(lines.filter(l => l.includes('speaker-audio-missing')).length, 1);
+});
+
 test('session closes only after 60 minutes without speaker audio', (context) => {
   context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   const manager = new SessionManager('test-key');

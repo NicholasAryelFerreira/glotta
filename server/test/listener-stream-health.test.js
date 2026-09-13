@@ -43,6 +43,7 @@ test('intentional stop sends speaker-paused while disconnect still sends speaker
   assert.match(stopBranch, /state: 'speaker-paused'/);
   assert.doesNotMatch(stopBranch, /state: 'speaker-offline'/);
   assert.match(closeBranch, /state: 'speaker-offline'/);
+  assert.match(closeBranch, /session\.end\('speaker disconnected for 5 minutes'\)/);
   assert.match(
     serverIndex,
     /if \(!session\.speakerWs\)[\s\S]*?session\.speakerGraceTimer \? 'speaker-offline' : 'speaker-paused'/,
