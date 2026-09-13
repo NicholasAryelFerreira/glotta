@@ -222,7 +222,7 @@ async function loadSession() {
   // session alive even before the mic is (re)started.
   connectWs();
   await populateMics();
-  if (pageActive) await start();
+  if (pageActive && captureGeneration === 0) await start();
 }
 loadSession();
 
@@ -570,7 +570,7 @@ function connectWs() {
       if (msg.code === 'speaker-busy') {
         const busyMessage = msg.message || 'Another device is capturing audio for this session.';
         finishSpeakerClaim(false, busyMessage);
-        if (running) stop(false);
+        stop(false);
         errEl.textContent = busyMessage;
         return;
       }
@@ -604,135 +604,187 @@ function connectWs() {
 }
 
 let running = false, startPending = false;
+let speakingIntended = false, captureGeneration = 0;
+let lastCaptureAt = 0, healthyCaptureSince = 0;
+let recoveryAttempts = 0, nextRecoveryAt = 0, recoveryPending = false;
+let captureNeedsTap = false;
+const CAPTURE_STALL_MS = 10_000;
+const CAPTURE_RECOVERY_LIMIT = 3;
 
-async function start() {
+function withCaptureTimeout(promise, ms, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function start(automatic = false) {
   if (running || startPending || !pageActive) return;
+  if (automatic && !speakingIntended) return;
+  speakingIntended = true;
+  if (!automatic) { recoveryAttempts = 0; captureNeedsTap = false; }
   startPending = true;
-  toggleBtn.disabled = true;
+  const generation = ++captureGeneration;
+  const current = () => generation === captureGeneration && pageActive && speakingIntended;
+  toggleBtn.disabled = false;
+  toggleLabel.textContent = 'Stop speaking';
   errEl.textContent = '';
   setStatus('connecting');
-  await publicConfigReady;
-  if (!pageActive) return;
-  const claimed = await requestSpeakerClaim();
-  if (!claimed) {
-    setStatus('paused');
-    startPending = false;
-    toggleBtn.disabled = false;
-    return;
-  }
-  // A clean external feed (e.g. a sound board via USB) is sent untouched; the
-  // laptop's own mic keeps echo/noise/gain processing on for the room.
-  const clean = selectedIsClean();
-  const audio = {
-    channelCount: { ideal: 2 },
-    echoCancellation: !clean,
-    noiseSuppression: !clean,
-    autoGainControl: !clean,
-  };
-  if (micSel.value && micSel.value !== 'default') audio.deviceId = { exact: micSel.value };
+  let context, stream, node;
+  let abandoned = false;
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio });
-  } catch (e) {
-    errEl.textContent = 'Microphone access denied. Note: browsers only allow the mic on https or on localhost.';
-    releaseSpeakerClaim();
-    setStatus('paused');
-    startPending = false;
-    toggleBtn.disabled = false;
-    return;
-  }
-  if (!pageActive) { stop(); return; }
-  try {
-    // Now that permission is granted, fill in the real device names.
+    // Create/resume before awaits so a manual tap can unlock browser audio.
+    context = new AudioContext();
+    const resumed = context.resume().catch(() => {});
+    await publicConfigReady;
+    if (!current()) return;
+    const claimed = await requestSpeakerClaim();
+    if (!current()) return;
+    if (!claimed) throw new Error(errEl.textContent || 'Could not reserve the audio input.');
+    const clean = selectedIsClean();
+    const audio = {
+      channelCount: { ideal: 2 }, echoCancellation: !clean,
+      noiseSuppression: !clean, autoGainControl: !clean,
+    };
+    if (micSel.value && micSel.value !== 'default') audio.deviceId = { exact: micSel.value };
+    const requestedStream = navigator.mediaDevices.getUserMedia({ audio }).then(value => {
+      if (abandoned || !current()) {
+        value.getTracks().forEach(track => track.stop());
+        throw new Error('Capture cancelled.');
+      }
+      return value;
+    });
+    stream = await withCaptureTimeout(requestedStream, 15_000, 'Microphone setup timed out.');
+    if (!current()) return;
     populateMics();
-    micSel.disabled = true;
-    audioCtx = new AudioContext();
-    // Automatic startup may need a user gesture on browsers with autoplay rules.
-    // Do not await resume(): it can remain pending until that gesture arrives.
-    audioCtx.resume().catch(() => {});
     const blobUrl = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
     try {
-      await audioCtx.audioWorklet.addModule(blobUrl);
-    } finally {
-      URL.revokeObjectURL(blobUrl);
+      await withCaptureTimeout(context.audioWorklet.addModule(blobUrl), 5_000, 'Audio setup timed out.');
+    } finally { URL.revokeObjectURL(blobUrl); }
+    if (!current()) return;
+    if (context.state !== 'running') {
+      await withCaptureTimeout(resumed, 3_000, 'Tap to resume audio.');
+      if (context.state !== 'running') throw new Error('Tap to resume audio.');
     }
-    if (!pageActive) { stop(); return; }
-    if (audioCtx.state !== 'running') {
-      throw new Error('Click Start speaking to enable microphone capture in this browser.');
-    }
-    const source = audioCtx.createMediaStreamSource(mediaStream);
-    workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
-    workletNode.port.onmessage = (ev) => {
+    if (!current()) return;
+    const source = context.createMediaStreamSource(stream);
+    node = new AudioWorkletNode(context, 'pcm-capture');
+    node.port.onmessage = (ev) => {
+      if (!current() || !running) return;
+      const now = Date.now();
+      if (now - lastCaptureAt >= CAPTURE_STALL_MS) healthyCaptureSince = now;
+      lastCaptureAt = now;
+      // Reset the retry budget only after sustained recovery, not one packet.
+      if (now - healthyCaptureSince >= 30_000) recoveryAttempts = 0;
       const speechDetected = updateAudioMeter(ev.data);
       sendSpeakerAudio(ev.data, speechDetected);
     };
-    source.connect(workletNode);
+    source.connect(node);
+    audioCtx = context; mediaStream = stream; workletNode = node;
     running = true;
-    audioCtx.onstatechange = recoverInterruptedCapture;
-    for (const track of mediaStream.getAudioTracks()) {
-      track.onended = recoverInterruptedCapture;
-    }
+    lastCaptureAt = healthyCaptureSince = Date.now();
+    context.onstatechange = recoverInterruptedCapture;
+    for (const track of stream.getAudioTracks()) track.onended = recoverInterruptedCapture;
+    micSel.disabled = true;
     setAudioMeterVisible(true);
-    toggleLabel.textContent = 'Stop speaking';
     toggleBtn.classList.remove('btn-accent');
     toggleBtn.classList.add('btn-live');
     setStatus(speakerClaimed ? 'live' : 'connecting');
-    startPending = false;
-    toggleBtn.disabled = false;
   } catch (e) {
-    stop();
-    errEl.textContent = e.message || 'Could not start audio capture. Click Start speaking to try again.';
+    if (!current()) return;
+    captureNeedsTap = e.name === 'NotAllowedError' || /Tap to resume|Microphone setup timed out/.test(e.message);
+    nextRecoveryAt = Date.now() + 5_000;
+    releaseSpeakerClaim();
+    setStatus('paused');
+    errEl.textContent = captureNeedsTap
+      ? 'Tap to resume audio. Check microphone permission if prompted.'
+      : 'Audio interrupted — trying to reconnect…';
+  } finally {
+    abandoned = true;
+    if (!running || audioCtx !== context) {
+      if (node) node.disconnect();
+      if (stream) stream.getTracks().forEach(track => track.stop());
+      if (context && context.state !== 'closed') context.close().catch(() => {});
+    }
+    if (generation === captureGeneration) startPending = false;
   }
 }
 
-function stop(releaseClaim = true) {
+function stop(releaseClaim = true, preserveIntent = false) {
+  if (!preserveIntent) { speakingIntended = false; captureNeedsTap = false; }
+  captureGeneration++;
   running = false;
   startPending = false;
+  if (claimResolver) finishSpeakerClaim(false);
   toggleBtn.disabled = !pageActive;
   maybeReportAudioStats(true);
   if (releaseClaim) releaseSpeakerClaim();
   if (workletNode) workletNode.disconnect();
-  if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+  if (mediaStream) mediaStream.getTracks().forEach(t => { t.onended = null; t.stop(); });
   if (audioCtx) { audioCtx.onstatechange = null; audioCtx.close().catch(() => {}); }
   workletNode = mediaStream = audioCtx = null;
   micSel.disabled = false;
   setAudioMeterVisible(false);
-  // Keep the presence WebSocket open while releasing the audio-input lock.
-  toggleLabel.textContent = 'Start speaking';
+  toggleLabel.textContent = preserveIntent ? 'Stop speaking' : 'Start speaking';
   toggleBtn.classList.remove('btn-live');
   toggleBtn.classList.add('btn-accent');
   setStatus('paused');
 }
 
-function recoverInterruptedCapture() {
-  // `running` stays true through browser suspension, but Stop speaking clears
-  // it. Returning to the page must never undo an intentional stop.
-  if (!running || startPending || !pageActive || document.visibilityState === 'hidden') return;
-  const context = audioCtx;
+async function recoverInterruptedCapture() {
+  if (!speakingIntended || startPending || recoveryPending || !pageActive
+      || document.visibilityState === 'hidden' || captureNeedsTap) return;
   const tracks = mediaStream?.getAudioTracks() || [];
-  if (!context || context.state === 'closed' || !tracks.length || tracks.some(t => t.readyState === 'ended')) {
-    stop(false);
-    void start();
+  const healthy = running && audioCtx?.state === 'running' && tracks.length
+    && tracks.every(t => t.readyState === 'live') && Date.now() - lastCaptureAt < CAPTURE_STALL_MS;
+  if (healthy) return;
+  if (Date.now() < nextRecoveryAt) return;
+  if (recoveryAttempts >= CAPTURE_RECOVERY_LIMIT) {
+    captureNeedsTap = true;
+    errEl.textContent = 'Tap to resume audio.';
     return;
   }
-  if (context.state === 'running') return;
-  setStatus('connecting');
-  errEl.textContent = 'Audio paused by the browser — tap the page if it does not resume.';
-  context.resume().then(() => {
-    if (!running || !pageActive || audioCtx !== context || context.state !== 'running') return;
-    errEl.textContent = '';
-    setStatus(speakerClaimed ? 'live' : 'connecting');
-  }).catch(() => {});
+  recoveryPending = true;
+  recoveryAttempts++;
+  nextRecoveryAt = Date.now() + 5_000;
+  const generation = captureGeneration;
+  try {
+    const context = audioCtx;
+    if (running && context && context.state !== 'running' && context.state !== 'closed'
+        && tracks.length && tracks.every(t => t.readyState === 'live')) {
+      setStatus('connecting');
+      try {
+        await withCaptureTimeout(context.resume(), 3_000, 'Tap to resume audio.');
+      } catch { /* A blocked resume needs a tap, not repeated microphone restarts. */ }
+      if (!speakingIntended || !pageActive || generation !== captureGeneration) return;
+      if (context.state === 'running') {
+        lastCaptureAt = healthyCaptureSince = Date.now();
+        errEl.textContent = '';
+        setStatus(speakerClaimed ? 'live' : 'connecting');
+        return;
+      }
+      captureNeedsTap = true;
+      errEl.textContent = 'Tap to resume audio.';
+      return;
+    }
+    stop(false, true);
+    await start(true);
+  } finally { recoveryPending = false; }
 }
 
+setInterval(recoverInterruptedCapture, 2_000);
 document.addEventListener('visibilitychange', recoverInterruptedCapture);
 window.addEventListener('pageshow', recoverInterruptedCapture);
 window.addEventListener('focus', recoverInterruptedCapture);
 document.addEventListener('pointerdown', (event) => {
   if (toggleBtn.contains(event.target) || document.getElementById('endBtn').contains(event.target)) return;
-  recoverInterruptedCapture();
+  if (!speakingIntended || !captureNeedsTap) return;
+  captureNeedsTap = false; recoveryAttempts = 0; nextRecoveryAt = 0;
+  void recoverInterruptedCapture();
 });
 
-toggleBtn.onclick = () => (running ? stop() : start());
+toggleBtn.onclick = () => (speakingIntended ? stop() : start());
 
 document.getElementById('endBtn').onclick = () => {
   if (!confirm('End this session for everyone listening?')) return;
