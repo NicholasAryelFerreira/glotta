@@ -221,6 +221,8 @@ async function loadSession() {
   // Connect right away so a refresh re-establishes presence and keeps the
   // session alive even before the mic is (re)started.
   connectWs();
+  await populateMics();
+  if (pageActive) await start();
 }
 loadSession();
 
@@ -604,12 +606,13 @@ function connectWs() {
 let running = false, startPending = false;
 
 async function start() {
-  if (startPending) return;
+  if (running || startPending || !pageActive) return;
   startPending = true;
   toggleBtn.disabled = true;
   errEl.textContent = '';
   setStatus('connecting');
   await publicConfigReady;
+  if (!pageActive) return;
   const claimed = await requestSpeakerClaim();
   if (!claimed) {
     setStatus('paused');
@@ -637,31 +640,50 @@ async function start() {
     toggleBtn.disabled = false;
     return;
   }
-  // Now that permission is granted, fill in the real device names.
-  populateMics();
-  micSel.disabled = true;
-  audioCtx = new AudioContext();
-  const blobUrl = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
-  await audioCtx.audioWorklet.addModule(blobUrl);
-  const source = audioCtx.createMediaStreamSource(mediaStream);
-  workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
-  workletNode.port.onmessage = (ev) => {
-    const speechDetected = updateAudioMeter(ev.data);
-    sendSpeakerAudio(ev.data, speechDetected);
-  };
-  source.connect(workletNode);
-  running = true;
-  setAudioMeterVisible(true);
-  toggleLabel.textContent = 'Stop speaking';
-  toggleBtn.classList.remove('btn-accent');
-  toggleBtn.classList.add('btn-live');
-  setStatus(speakerClaimed ? 'live' : 'connecting');
-  startPending = false;
-  toggleBtn.disabled = false;
+  if (!pageActive) { stop(); return; }
+  try {
+    // Now that permission is granted, fill in the real device names.
+    populateMics();
+    micSel.disabled = true;
+    audioCtx = new AudioContext();
+    // Automatic startup may need a user gesture on browsers with autoplay rules.
+    // Do not await resume(): it can remain pending until that gesture arrives.
+    audioCtx.resume().catch(() => {});
+    const blobUrl = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
+    try {
+      await audioCtx.audioWorklet.addModule(blobUrl);
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+    if (!pageActive) { stop(); return; }
+    if (audioCtx.state !== 'running') {
+      throw new Error('Click Start speaking to enable microphone capture in this browser.');
+    }
+    const source = audioCtx.createMediaStreamSource(mediaStream);
+    workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
+    workletNode.port.onmessage = (ev) => {
+      const speechDetected = updateAudioMeter(ev.data);
+      sendSpeakerAudio(ev.data, speechDetected);
+    };
+    source.connect(workletNode);
+    running = true;
+    setAudioMeterVisible(true);
+    toggleLabel.textContent = 'Stop speaking';
+    toggleBtn.classList.remove('btn-accent');
+    toggleBtn.classList.add('btn-live');
+    setStatus(speakerClaimed ? 'live' : 'connecting');
+    startPending = false;
+    toggleBtn.disabled = false;
+  } catch (e) {
+    stop();
+    errEl.textContent = e.message || 'Could not start audio capture. Click Start speaking to try again.';
+  }
 }
 
 function stop(releaseClaim = true) {
   running = false;
+  startPending = false;
+  toggleBtn.disabled = !pageActive;
   maybeReportAudioStats(true);
   if (releaseClaim) releaseSpeakerClaim();
   if (workletNode) workletNode.disconnect();

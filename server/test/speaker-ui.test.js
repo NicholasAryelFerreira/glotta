@@ -6,6 +6,65 @@ import vm from 'node:vm';
 const speakHtml = await readFile(new URL('../public/speak.html', import.meta.url), 'utf8');
 const inlineScript = speakHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 
+test('loading either session type starts capture after restoring the microphone selection', async () => {
+  const loadSession = inlineScript.match(/async function loadSession\(\)[\s\S]*?\n\}/)[0];
+  for (const sessionId of ['SERMON', 'ABC123']) {
+    const calls = [];
+    const context = {
+      sessionId, pageActive: true,
+      fetch: async () => ({ ok: true, json: async () => ({}) }),
+      document: { getElementById: () => ({}) },
+      connectWs: () => calls.push('connect'),
+      populateMics: async () => calls.push('microphones'),
+      start: async () => calls.push('start'),
+    };
+    await vm.runInNewContext(`${loadSession}; loadSession();`, context);
+    assert.deepEqual(calls, ['connect', 'microphones', 'start']);
+    context.pageActive = false;
+    calls.length = 0;
+    await vm.runInNewContext(`${loadSession}; loadSession();`, context);
+    assert.deepEqual(calls, ['connect', 'microphones']);
+  }
+});
+
+test('automatic capture cleans up and allows retry when the browser suspends audio', async () => {
+  const start = inlineScript.match(/async function start\(\)[\s\S]*?\n\}/)[0];
+  let released = false;
+  let trackStopped = false;
+  const result = await vm.runInNewContext(`
+    let running = false, startPending = false, pageActive = true;
+    let mediaStream, audioCtx;
+    const toggleBtn = { disabled: false }, errEl = {};
+    const micSel = { value: 'default' };
+    const publicConfigReady = Promise.resolve();
+    function stop() {
+      mediaStream.getTracks().forEach(t => t.stop());
+      audioCtx.close();
+      startPending = false;
+      toggleBtn.disabled = false;
+      release();
+    }
+    ${start}
+    start().then(() => ({ startPending, disabled: toggleBtn.disabled, error: errEl.textContent }));
+  `, {
+    setStatus() {}, requestSpeakerClaim: async () => true, selectedIsClean: () => false,
+    populateMics() {}, workletCode: '', Blob,
+    URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} },
+    navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() { trackStopped = true; } }] }) } },
+    AudioContext: class {
+      state = 'suspended';
+      audioWorklet = { addModule: async () => {} };
+      resume() { return new Promise(() => {}); }
+      close() {}
+    },
+    release() { released = true; },
+  });
+  assert.equal(result.startPending, false);
+  assert.equal(result.disabled, false);
+  assert.match(result.error, /Click Start speaking/);
+  assert.ok(released && trackStopped);
+});
+
 test('speaker page shows only languages with active listeners', () => {
   assert.doesNotMatch(speakHtml, /No listeners yet/);
   assert.doesNotMatch(speakHtml, /id="stats"/);
