@@ -133,6 +133,7 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 - `LIVE_EDGE_MAX_QUEUE_SECONDS` is an opt-in safety flag. Leave it at `0` for legacy behavior; set it to `1` for a one-second network-queue budget and a two-second listener buffer. Enabled values are capped at one second so Glotta's own buffering cannot exceed five seconds even if the setting is accidentally higher.
 - A session keeps capturing through an hour of silence; silent audio packets count as incoming audio. It automatically ends after 60 minutes without any incoming speaker audio packets (or longer if configured with `SESSION_AUDIO_IDLE_MINUTES`).
 - Sessions have a four-hour total limit, including time spent waiting before speech begins.
+- Both the no-audio timeout and the four-hour limit stop the speaker page with an explanation and require starting a new session; neither automatically revives the ended session.
 
 ## License
 

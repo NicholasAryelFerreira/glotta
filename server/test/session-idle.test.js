@@ -76,12 +76,16 @@ test('session closes only after 60 minutes without speaker audio', (context) => 
   context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   const manager = new SessionManager('test-key');
   const session = manager.create({ id: 'IDLE60', title: 'Idle timer test' });
+  const speaker = fakeSpeakerSocket();
+  session.addSpeakerSocket(speaker);
 
   context.mock.timers.tick(59 * 60_000);
   assert.equal(manager.get(session.id), session);
 
   context.mock.timers.tick(60_000);
   assert.equal(manager.get(session.id), undefined);
+  assert.equal(speaker.closeCode, 1000);
+  assert.equal(speaker.closeReason, 'audio idle timeout');
 });
 
 test('session closes after the four-hour maximum even when audio activity stays recent', (context) => {

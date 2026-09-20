@@ -329,7 +329,7 @@ class Session {
       if (this.ended) return;
       const idleFor = Date.now() - this.lastAudioAt;
       if (idleFor >= SESSION_AUDIO_IDLE_MS) {
-        this.end(`no speaker audio for ${SESSION_AUDIO_IDLE_MINUTES} minutes`);
+        this.end(`no speaker audio for ${SESSION_AUDIO_IDLE_MINUTES} minutes`, 'audio idle timeout');
       } else {
         this.scheduleAudioIdleCheck(SESSION_AUDIO_IDLE_MS - idleFor);
       }

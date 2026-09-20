@@ -592,6 +592,12 @@ function connectWs() {
       errEl.textContent = 'This session reached the 4-hour limit — start a new session from the home page.';
       return;
     }
+    if (event.reason === 'audio idle timeout') {
+      stop(false);
+      sessionEnded();
+      errEl.textContent = 'This session ended because no audio was received for at least 1 hour — start a new session from the home page.';
+      return;
+    }
     if (!pageActive) return;
     if (running) { errEl.textContent = 'Connection lost - reconnecting...'; setStatus('connecting'); }
     setTimeout(() => { if (pageActive && !ws) connectWs(); }, 1500);

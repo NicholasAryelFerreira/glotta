@@ -111,6 +111,31 @@ test('speaker page stops instead of reviving a session after the four-hour limit
   assert.match(speakHtml, /This session reached the 4-hour limit/);
 });
 
+test('audio idle timeout stops capture and disables the page without scheduling reconnection', () => {
+  const onclose = inlineScript.match(/socket\.onclose = \(event\) => \{[\s\S]*?\n  \};/)[0];
+  const sessionEnded = inlineScript.match(/function sessionEnded\(\)[\s\S]*?\n\}/)[0];
+  for (const running of [true, false]) {
+    const socket = {};
+    let stops = 0;
+    let reconnects = 0;
+    const context = {
+      socket, ws: socket, socketSeq: 1, speakerSocketSeq: 1,
+      running, speakerClaimed: true, pageActive: true,
+      errEl: {}, toggleBtn: { disabled: false },
+      stop: closeWs => { assert.equal(closeWs, false); stops++; },
+      setTimeout: () => { reconnects++; }, setStatus() {},
+    };
+    vm.runInNewContext(`${sessionEnded}\n${onclose}\nsocket.onclose({ reason: 'audio idle timeout' });`, context);
+    assert.equal(stops, 1, 'cancel capture intent even if capture is already interrupted');
+    assert.equal(context.pageActive, false);
+    assert.equal(context.toggleBtn.disabled, true);
+    assert.equal(context.ws, null);
+    assert.equal(context.speakerClaimed, false);
+    assert.equal(reconnects, 0);
+    assert.match(context.errEl.textContent, /no audio was received for at least 1 hour/);
+  }
+});
+
 function captureHarness(t) {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100_000 });
   const classList = { add() {}, remove() {} };
