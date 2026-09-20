@@ -103,12 +103,12 @@ test('speaker page replaces interim transcription and commits finalized text', (
   ]);
 });
 
-test('speaker page stops instead of reviving a session after the two-hour limit', () => {
+test('speaker page stops instead of reviving a session after the four-hour limit', () => {
   assert.match(
     speakHtml,
     /event\.reason === 'maximum duration reached'[\s\S]*?stop\(false\)[\s\S]*?sessionEnded\(\)/,
   );
-  assert.match(speakHtml, /This session reached the 2-hour limit/);
+  assert.match(speakHtml, /This session reached the 4-hour limit/);
 });
 
 function captureHarness(t) {
@@ -150,12 +150,12 @@ async function flushCapturePromises() { for (let i = 0; i < 25; i++) await Promi
 test('silent audio stays healthy; missing chunks keep retrying slowly without requiring a tap', async t => {
   const h = captureHarness(t);
   await h.run('start()');
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 360; i++) {
     t.mock.timers.tick(10_000);
     h.frame();
     await h.run('recoverInterruptedCapture()');
   }
-  assert.equal(h.counts().starts, 1, 'twenty quiet minutes do not restart capture');
+  assert.equal(h.counts().starts, 1, 'one quiet hour does not restart capture');
   for (let i = 0; i < 4; i++) {
     t.mock.timers.tick(10_000);
     await h.run('recoverInterruptedCapture()');

@@ -84,21 +84,21 @@ test('session closes only after 60 minutes without speaker audio', (context) => 
   assert.equal(manager.get(session.id), undefined);
 });
 
-test('session closes after the two-hour maximum even when audio activity stays recent', (context) => {
+test('session closes after the four-hour maximum even when audio activity stays recent', (context) => {
   context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   const manager = new SessionManager('test-key');
-  const session = manager.create({ id: 'MAX120', title: 'Maximum duration test' });
+  const session = manager.create({ id: 'MAX240', title: 'Maximum duration test' });
   const speaker = fakeSpeakerSocket();
   session.addSpeakerSocket(speaker);
 
-  context.mock.timers.tick(59 * 60_000);
-  session.lastAudioAt = Date.now();
-  context.mock.timers.tick(59 * 60_000);
-  session.lastAudioAt = Date.now();
-  assert.equal(manager.get(session.id), session);
+  for (let hour = 0; hour < 4; hour++) {
+    context.mock.timers.tick(59 * 60_000);
+    session.lastAudioAt = Date.now();
+    assert.equal(manager.get(session.id), session);
+  }
 
-  context.mock.timers.tick(2 * 60_000);
-  assert.equal(SESSION_MAX_DURATION_MINUTES, 120);
+  context.mock.timers.tick(4 * 60_000);
+  assert.equal(SESSION_MAX_DURATION_MINUTES, 240);
   assert.equal(manager.get(session.id), undefined);
   assert.equal(speaker.closeCode, 1000);
   assert.equal(speaker.closeReason, 'maximum duration reached');

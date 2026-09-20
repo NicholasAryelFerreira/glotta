@@ -54,7 +54,7 @@ const SESSION_AUDIO_IDLE_MINUTES = Number.isFinite(configuredAudioIdleMinutes)
   ? Math.max(MIN_AUDIO_IDLE_MINUTES, configuredAudioIdleMinutes)
   : MIN_AUDIO_IDLE_MINUTES;
 const SESSION_AUDIO_IDLE_MS = SESSION_AUDIO_IDLE_MINUTES * 60_000;
-export const SESSION_MAX_DURATION_MINUTES = 120;
+export const SESSION_MAX_DURATION_MINUTES = 240;
 const SESSION_MAX_DURATION_MS = SESSION_MAX_DURATION_MINUTES * 60_000;
 
 // Gemini is the safe default for older clients and omitted or unexpected values.

@@ -131,7 +131,8 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 - Each listener language restarts independently after 20 seconds of voiced source audio without translated captions; audio packets alone do not count as healthy output because they may contain silence.
 - Audio queue, reconnect, first-output, and dropped-audio metrics are emitted as structured `[audio-metrics]` logs. Healthy stream counters are aggregated into one-minute summaries, while stalls and queue drops remain immediate or rate-limited to ten seconds.
 - `LIVE_EDGE_MAX_QUEUE_SECONDS` is an opt-in safety flag. Leave it at `0` for legacy behavior; set it to `1` for a one-second network-queue budget and a two-second listener buffer. Enabled values are capped at one second so Glotta's own buffering cannot exceed five seconds even if the setting is accidentally higher.
-- A session automatically ends after 60 minutes without incoming speaker audio.
+- A session keeps capturing through an hour of silence; silent audio packets count as incoming audio. It automatically ends after 60 minutes without any incoming speaker audio packets (or longer if configured with `SESSION_AUDIO_IDLE_MINUTES`).
+- Sessions have a four-hour total limit, including time spent waiting before speech begins.
 
 ## License
 
