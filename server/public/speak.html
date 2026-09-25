@@ -647,7 +647,10 @@ async function start(automatic = false) {
     pendingAudioContext = context;
     const updateStartupButton = () => {
       if (!current() || !startPending) return;
-      toggleLabel.textContent = context.state === 'running' ? 'Stop speaking' : 'Start speaking';
+      const audioReady = context.state === 'running';
+      toggleLabel.textContent = audioReady ? 'Stop speaking' : 'Start speaking';
+      toggleBtn.classList.remove(audioReady ? 'btn-accent' : 'btn-live');
+      toggleBtn.classList.add(audioReady ? 'btn-live' : 'btn-accent');
     };
     context.onstatechange = updateStartupButton;
     const resumed = context.resume().catch(() => {});

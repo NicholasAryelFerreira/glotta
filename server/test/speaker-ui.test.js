@@ -138,7 +138,12 @@ test('audio idle timeout stops capture and disables the page without scheduling 
 
 function captureHarness(t) {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100_000 });
-  const classList = { add() {}, remove() {} };
+  const classes = new Set(['btn-accent']);
+  const classList = {
+    add: value => classes.add(value),
+    remove: value => classes.delete(value),
+    contains: value => classes.has(value),
+  };
   let lastNode, starts = 0, stops = 0, resumed = 0;
   const track = { readyState: 'live', stop() { stops++; } };
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
@@ -336,6 +341,8 @@ test('unblocked desktop startup keeps its existing button flow and starts automa
   const h = captureHarness(t);
   const pending = h.run('start()');
   assert.equal(h.sandbox.toggleLabel.textContent, 'Stop speaking');
+  assert.equal(h.sandbox.toggleBtn.classList.contains('btn-live'), true);
+  assert.equal(h.sandbox.toggleBtn.classList.contains('btn-accent'), false);
   await pending;
   assert.equal(h.run('running'), true);
   assert.equal(h.sandbox.toggleLabel.textContent, 'Stop speaking');
