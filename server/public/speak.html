@@ -610,6 +610,7 @@ function connectWs() {
 }
 
 let running = false, startPending = false;
+let pendingAudioContext = null;
 let speakingIntended = false, captureGeneration = 0;
 let lastCaptureAt = 0, healthyCaptureSince = 0;
 let recoveryAttempts = 0, nextRecoveryAt = 0, recoveryPending = false;
@@ -643,7 +644,14 @@ async function start(automatic = false) {
   try {
     // Create/resume before awaits so a manual tap can unlock browser audio.
     context = new AudioContext();
+    pendingAudioContext = context;
+    const updateStartupButton = () => {
+      if (!current() || !startPending) return;
+      toggleLabel.textContent = context.state === 'running' ? 'Cancel startup' : 'Start speaking';
+    };
+    context.onstatechange = updateStartupButton;
     const resumed = context.resume().catch(() => {});
+    updateStartupButton();
     await publicConfigReady;
     if (!current()) return;
     const claimed = await requestSpeakerClaim();
@@ -714,7 +722,9 @@ async function start(automatic = false) {
       : 'Audio interrupted — trying to reconnect…';
   } finally {
     abandoned = true;
+    if (pendingAudioContext === context) pendingAudioContext = null;
     if (!running || audioCtx !== context) {
+      if (context) context.onstatechange = null;
       if (node) node.disconnect();
       if (stream) stream.getTracks().forEach(track => track.stop());
       if (context && context.state !== 'closed') context.close().catch(() => {});
@@ -728,6 +738,11 @@ function stop(releaseClaim = true, preserveIntent = false) {
   captureGeneration++;
   running = false;
   startPending = false;
+  if (pendingAudioContext) {
+    pendingAudioContext.onstatechange = null;
+    pendingAudioContext.close().catch(() => {});
+    pendingAudioContext = null;
+  }
   if (claimResolver) finishSpeakerClaim(false);
   toggleBtn.disabled = !pageActive;
   maybeReportAudioStats(true);
@@ -790,6 +805,10 @@ async function recoverInterruptedCapture() {
 }
 
 function toggleSpeaking() {
+  if (startPending && pendingAudioContext && pendingAudioContext.state !== 'running') {
+    // Unlock the existing startup directly in the gesture, without cancelling it.
+    return pendingAudioContext.resume().catch(() => {});
+  }
   if (startPending || (running && !captureNeedsTap)) return stop();
   // Rebuild blocked capture directly inside the tap so Safari can unlock audio.
   if (running) stop(false, true);

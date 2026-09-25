@@ -240,7 +240,7 @@ test('Stop during microphone permission cancels late capture', async t => {
   assert.ok(h.counts().stops > 0);
 });
 
-test('startup waits for slow audio resume instead of immediately requesting a tap', async t => {
+test('slow audio resume can still finish automatically', async t => {
   const h = captureHarness(t);
   let resume;
   h.sandbox.AudioContext.prototype.resume = function() {
@@ -285,6 +285,7 @@ test('blocked audio resume requests one tap and does not loop automatic restarts
     return new Promise(() => {});
   };
   const pending = h.run('start()');
+  assert.equal(h.sandbox.toggleLabel.textContent, 'Start speaking', 'suspended audio offers a tap before the timeout');
   await flushCapturePromises();
   t.mock.timers.tick(3_000);
   await pending;
@@ -304,6 +305,41 @@ test('blocked audio resume requests one tap and does not loop automatic restarts
   assert.equal(h.sandbox.toggleLabel.textContent, 'Stop speaking');
   h.run('toggleSpeaking()');
   assert.equal(h.run('running || speakingIntended'), false, 'the next tap stops healthy capture');
+});
+
+test('a tap unlocks suspended startup immediately without restarting microphone setup', async t => {
+  const h = captureHarness(t);
+  let unlock, resumes = 0;
+  h.sandbox.AudioContext.prototype.resume = function() {
+    if (++resumes === 1) {
+      this.state = 'suspended';
+      return new Promise(resolve => { unlock = resolve; });
+    }
+    this.state = 'running';
+    this.onstatechange?.();
+    unlock();
+    return Promise.resolve();
+  };
+  const pending = h.run('start()');
+  assert.equal(h.sandbox.toggleLabel.textContent, 'Start speaking');
+  await h.run('toggleSpeaking()');
+  assert.equal(resumes, 2);
+  await pending;
+  assert.equal(h.run('running'), true);
+  assert.equal(h.counts().starts, 1);
+  assert.equal(h.counts().stops, 0);
+  assert.equal(h.sandbox.toggleLabel.textContent, 'Stop speaking');
+  h.run('stop()');
+});
+
+test('unblocked desktop startup keeps its existing button flow and starts automatically', async t => {
+  const h = captureHarness(t);
+  const pending = h.run('start()');
+  assert.equal(h.sandbox.toggleLabel.textContent, 'Cancel startup');
+  await pending;
+  assert.equal(h.run('running'), true);
+  assert.equal(h.sandbox.toggleLabel.textContent, 'Stop speaking');
+  h.run('stop()');
 });
 
 test('Stop during a pending resume cannot restore capture or clear the stop state', async t => {
