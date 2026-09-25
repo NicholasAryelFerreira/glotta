@@ -635,7 +635,7 @@ async function start(automatic = false) {
   const generation = ++captureGeneration;
   const current = () => generation === captureGeneration && pageActive && speakingIntended;
   toggleBtn.disabled = false;
-  toggleLabel.textContent = 'Stop speaking';
+  toggleLabel.textContent = 'Cancel startup';
   errEl.textContent = '';
   setStatus('connecting');
   let context, stream, node;
@@ -695,6 +695,7 @@ async function start(automatic = false) {
     for (const track of stream.getAudioTracks()) track.onended = recoverInterruptedCapture;
     micSel.disabled = true;
     setAudioMeterVisible(true);
+    toggleLabel.textContent = 'Stop speaking';
     toggleBtn.classList.remove('btn-accent');
     toggleBtn.classList.add('btn-live');
     setStatus(speakerClaimed ? 'live' : 'connecting');
@@ -704,6 +705,9 @@ async function start(automatic = false) {
     nextRecoveryAt = Date.now() + (recoveryAttempts >= CAPTURE_FAST_RECOVERY_ATTEMPTS
       ? CAPTURE_SLOW_RECOVERY_MS : 5_000);
     releaseSpeakerClaim();
+    toggleLabel.textContent = 'Start speaking';
+    toggleBtn.classList.remove('btn-live');
+    toggleBtn.classList.add('btn-accent');
     setStatus('paused');
     errEl.textContent = captureNeedsTap
       ? 'Tap to resume audio. Check microphone permission if prompted.'
@@ -734,7 +738,7 @@ function stop(releaseClaim = true, preserveIntent = false) {
   workletNode = mediaStream = audioCtx = null;
   micSel.disabled = false;
   setAudioMeterVisible(false);
-  toggleLabel.textContent = preserveIntent ? 'Stop speaking' : 'Start speaking';
+  toggleLabel.textContent = 'Start speaking';
   toggleBtn.classList.remove('btn-live');
   toggleBtn.classList.add('btn-accent');
   setStatus('paused');
@@ -767,16 +771,29 @@ async function recoverInterruptedCapture() {
       if (context.state === 'running') {
         lastCaptureAt = healthyCaptureSince = Date.now();
         errEl.textContent = '';
+        toggleLabel.textContent = 'Stop speaking';
+        toggleBtn.classList.remove('btn-accent');
+        toggleBtn.classList.add('btn-live');
         setStatus(speakerClaimed ? 'live' : 'connecting');
         return;
       }
       captureNeedsTap = true;
+      toggleLabel.textContent = 'Start speaking';
+      toggleBtn.classList.remove('btn-live');
+      toggleBtn.classList.add('btn-accent');
       errEl.textContent = 'Tap to resume audio.';
       return;
     }
     stop(false, true);
     await start(true);
   } finally { recoveryPending = false; }
+}
+
+function toggleSpeaking() {
+  if (startPending || (running && !captureNeedsTap)) return stop();
+  // Rebuild blocked capture directly inside the tap so Safari can unlock audio.
+  if (running) stop(false, true);
+  return start();
 }
 
 setInterval(recoverInterruptedCapture, 2_000);
@@ -790,7 +807,7 @@ document.addEventListener('pointerdown', (event) => {
   void recoverInterruptedCapture();
 });
 
-toggleBtn.onclick = () => (speakingIntended ? stop() : start());
+toggleBtn.onclick = toggleSpeaking;
 
 document.getElementById('endBtn').onclick = () => {
   if (!confirm('End this session for everyone listening?')) return;

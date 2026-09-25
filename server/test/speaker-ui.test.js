@@ -279,6 +279,7 @@ test('failed recovery keeps speaking intent and can retry a temporary device err
 
 test('blocked audio resume requests one tap and does not loop automatic restarts', async t => {
   const h = captureHarness(t);
+  const resume = h.sandbox.AudioContext.prototype.resume;
   h.sandbox.AudioContext.prototype.resume = function() {
     this.state = 'suspended';
     return new Promise(() => {});
@@ -294,6 +295,15 @@ test('blocked audio resume requests one tap and does not loop automatic restarts
   t.mock.timers.tick(60_000);
   await h.run('recoverInterruptedCapture()');
   assert.equal(h.counts().starts, 1);
+  assert.equal(h.sandbox.toggleLabel.textContent, 'Start speaking');
+  h.sandbox.AudioContext.prototype.resume = resume;
+  const retry = h.run('toggleSpeaking()');
+  assert.equal(h.counts().resumed, 1, 'resume is invoked synchronously within the tap');
+  await retry;
+  assert.equal(h.run('running'), true, 'one tap starts capture without a separate stop');
+  assert.equal(h.sandbox.toggleLabel.textContent, 'Stop speaking');
+  h.run('toggleSpeaking()');
+  assert.equal(h.run('running || speakingIntended'), false, 'the next tap stops healthy capture');
 });
 
 test('Stop during a pending resume cannot restore capture or clear the stop state', async t => {
