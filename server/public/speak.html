@@ -636,7 +636,7 @@ async function start(automatic = false) {
   const generation = ++captureGeneration;
   const current = () => generation === captureGeneration && pageActive && speakingIntended;
   toggleBtn.disabled = false;
-  toggleLabel.textContent = 'Cancel startup';
+  toggleLabel.textContent = 'Stop speaking';
   errEl.textContent = '';
   setStatus('connecting');
   let context, stream, node;
@@ -647,7 +647,7 @@ async function start(automatic = false) {
     pendingAudioContext = context;
     const updateStartupButton = () => {
       if (!current() || !startPending) return;
-      toggleLabel.textContent = context.state === 'running' ? 'Cancel startup' : 'Start speaking';
+      toggleLabel.textContent = context.state === 'running' ? 'Stop speaking' : 'Start speaking';
     };
     context.onstatechange = updateStartupButton;
     const resumed = context.resume().catch(() => {});

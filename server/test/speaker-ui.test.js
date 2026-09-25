@@ -335,7 +335,7 @@ test('a tap unlocks suspended startup immediately without restarting microphone 
 test('unblocked desktop startup keeps its existing button flow and starts automatically', async t => {
   const h = captureHarness(t);
   const pending = h.run('start()');
-  assert.equal(h.sandbox.toggleLabel.textContent, 'Cancel startup');
+  assert.equal(h.sandbox.toggleLabel.textContent, 'Stop speaking');
   await pending;
   assert.equal(h.run('running'), true);
   assert.equal(h.sandbox.toggleLabel.textContent, 'Stop speaking');
