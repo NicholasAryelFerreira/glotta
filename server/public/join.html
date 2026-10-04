@@ -25,8 +25,11 @@
   .captions-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
     color: var(--faint); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 10px; }
   .captions-body { font-size: 18px; line-height: 1.6; color: var(--ink); min-height: 90px;
-    max-height: 42vh; overflow-y: auto; white-space: pre-wrap; }
+    max-height: 42vh; overflow-y: auto; white-space: pre-wrap; scroll-behavior: smooth; }
   .captions-body.placeholder { color: var(--faint); font-style: italic; font-size: 15px; }
+  .live-jump { width: auto; margin: 10px auto 0; padding: 8px 16px; font-size: 14px; display: flex; }
+  .live-jump[hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) { .captions-body { scroll-behavior: auto; } }
 </style>
 </head>
 <body>
@@ -71,6 +74,7 @@
         Captions
       </div>
       <div class="captions-body placeholder" id="captions">Captions will appear here once the speaker begins.</div>
+      <button type="button" class="btn btn-ghost live-jump" id="liveJump" hidden>↓ Back to live</button>
     </div>
 
     <div class="err" id="err"></div>
@@ -217,7 +221,11 @@ let ws = null, audioCtx = null, playerNode = null, listening = false, captionsSt
 let audioNeedsTap = false, audioSetupPending = false, hiddenAt = 0;
 let listenerSocketSeq = 0;
 let audioPlayerSeq = 0;
-const MAX_LIVE_CAPTION_CHARS = 2000;
+// Roughly an hour of speech; trimmed in one large block so the text does not
+// re-wrap on every fragment.
+const MAX_LIVE_CAPTION_CHARS = 50_000;
+const CAPTION_TRIM_KEEP_CHARS = 40_000;
+const CAPTION_BOTTOM_SLACK_PX = 40;
 const AUDIO_SETUP_TIMEOUT_MS = 5_000;
 const AUDIO_CLOSE_TIMEOUT_MS = 1_000;
 const LISTENER_INSTANCE_KEY = `glotta.listenerInstance.${sessionId}`;
@@ -252,12 +260,45 @@ function withTimeout(promise, timeoutMs, message) {
   ]).finally(() => clearTimeout(timer));
 }
 
+// Follow the live text only while the reader is at the bottom. Scrolling up
+// pauses it; scrolling back down or tapping "Back to live" resumes it.
+const liveJumpBtn = document.getElementById('liveJump');
+let followCaptions = true, lastCaptionScrollTop = 0;
+
+function captionsNearBottom() {
+  return captionsEl.scrollHeight - captionsEl.scrollTop - captionsEl.clientHeight <= CAPTION_BOTTOM_SLACK_PX;
+}
+
+captionsEl.addEventListener('scroll', () => {
+  const top = captionsEl.scrollTop;
+  if (captionsNearBottom()) followCaptions = true;
+  // Smooth follow-scrolling only moves down, so moving up is the reader.
+  else if (top < lastCaptionScrollTop - 2) followCaptions = false;
+  lastCaptionScrollTop = top;
+  liveJumpBtn.hidden = followCaptions;
+}, { passive: true });
+
+liveJumpBtn.onclick = () => {
+  followCaptions = true;
+  liveJumpBtn.hidden = true;
+  captionsEl.scrollTop = captionsEl.scrollHeight;
+};
+
 function appendBoundedText(el, text, maxChars) {
-  el.textContent += text;
-  if (el.textContent.length > maxChars) {
-    el.textContent = el.textContent.slice(-maxChars).replace(/^\S*\s?/, '');
+  // Append to one text node so earlier lines keep their line breaks.
+  let node = el.lastChild;
+  if (!node || node.nodeType !== Node.TEXT_NODE) node = el.appendChild(document.createTextNode(''));
+  node.appendData(text);
+  if (node.length > maxChars) {
+    const heightBefore = el.scrollHeight;
+    const cutAt = node.data.indexOf(' ', node.length - CAPTION_TRIM_KEEP_CHARS);
+    node.deleteData(0, cutAt < 0 ? node.length - CAPTION_TRIM_KEEP_CHARS : cutAt + 1);
+    // Keep a reader who scrolled up on the same words after the trim.
+    if (!followCaptions) {
+      el.scrollTo({ top: el.scrollTop - (heightBefore - el.scrollHeight), behavior: 'instant' });
+    }
   }
-  el.scrollTop = el.scrollHeight;
+  if (followCaptions) el.scrollTop = el.scrollHeight;
 }
 
 function base64ToFloat32(b64) {
