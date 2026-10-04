@@ -552,6 +552,7 @@ function stop(closeWs = true) {
   // Keep the player for the next "Tap to listen": iPhones often refuse to
   // start a new AudioContext while the previous one is still closing.
   audioCtx?.suspend().catch(() => { /* resumed or closed later */ });
+  releaseScreenAwake();
   ws = null;
   langSel.disabled = false;
   toggleLabel.textContent = 'Tap to listen';
@@ -564,11 +565,38 @@ function stop(closeWs = true) {
   setStatus('hidden');
 }
 
+// Keep the phone screen on while listening so captions stay visible and the
+// page is not put to sleep by auto-lock. Browsers drop the lock whenever the
+// page is hidden, so it is requested again when the page comes back.
+let wakeLock = null, wakeLockPending = false;
+
+async function keepScreenAwake() {
+  if (wakeLock || wakeLockPending || !('wakeLock' in navigator)) return;
+  wakeLockPending = true;
+  try {
+    const lock = await navigator.wakeLock.request('screen');
+    lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
+    if (listening || audioSetupPending) wakeLock = lock;
+    else lock.release().catch(() => { /* already released */ });
+  } catch { /* refused, e.g. Low Power Mode; the page still works */ }
+  finally { wakeLockPending = false; }
+}
+
+function releaseScreenAwake() {
+  const lock = wakeLock;
+  wakeLock = null;
+  lock?.release().catch(() => { /* already released */ });
+}
+
 toggleBtn.onclick = () => {
-  if (!listening) start();
-  else if (audioNeedsTap) resumeListening();
+  if (!listening) { start().then(() => { if (!listening) releaseScreenAwake(); }); keepScreenAwake(); }
+  else if (audioNeedsTap) { resumeListening(); keepScreenAwake(); }
   else stop();
 };
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && listening) keepScreenAwake();
+});
 
 // Mobile browsers may permanently interrupt Web Audio after a page spends
 // time behind another app. Keep captions connected, but after a longer switch
