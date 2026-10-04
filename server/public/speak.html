@@ -829,7 +829,36 @@ document.addEventListener('pointerdown', (event) => {
   void recoverInterruptedCapture();
 });
 
-toggleBtn.onclick = toggleSpeaking;
+// Keep the phone screen on while the speaker intends to be live so auto-lock
+// does not interrupt the microphone. Browsers drop the lock whenever the page
+// is hidden, so it is requested again when the page comes back.
+let wakeLock = null, wakeLockPending = false;
+
+async function keepScreenAwake() {
+  if (wakeLock || wakeLockPending || !('wakeLock' in navigator)) return;
+  wakeLockPending = true;
+  try {
+    const lock = await navigator.wakeLock.request('screen');
+    lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
+    if (speakingIntended) wakeLock = lock;
+    else lock.release().catch(() => { /* already released */ });
+  } catch { /* refused, e.g. Low Power Mode; the page still works */ }
+  finally { wakeLockPending = false; }
+}
+
+function syncScreenAwake() {
+  if (speakingIntended && pageActive && document.visibilityState === 'visible') {
+    keepScreenAwake();
+  } else if (wakeLock) {
+    const lock = wakeLock;
+    wakeLock = null;
+    lock.release().catch(() => { /* already released */ });
+  }
+}
+
+toggleBtn.onclick = () => { toggleSpeaking(); syncScreenAwake(); };
+document.addEventListener('visibilitychange', syncScreenAwake);
+setInterval(syncScreenAwake, 2_000);
 
 document.getElementById('endBtn').onclick = () => {
   if (!confirm('End this session for everyone listening?')) return;
