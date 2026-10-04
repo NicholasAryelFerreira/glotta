@@ -453,8 +453,9 @@ async function start() {
   toggleBtn.disabled = true;
   errEl.textContent = '';
   try {
-    // The context is created inside this tap handler for mobile Safari.
-    await createAudioPlayer();
+    // The context is created (or the one kept by stop() is resumed) inside
+    // this tap handler for mobile Safari.
+    await resumeAudioPlayer();
     listening = true;
     audioNeedsTap = false;
     langSel.disabled = true;
@@ -507,7 +508,9 @@ function stop(closeWs = true) {
   listenerSocketSeq += 1;
   clearScheduledAudio();
   if (closeWs && ws) ws.close();
-  destroyAudioPlayer();
+  // Keep the player for the next "Tap to listen": iPhones often refuse to
+  // start a new AudioContext while the previous one is still closing.
+  audioCtx?.suspend().catch(() => { /* resumed or closed later */ });
   ws = null;
   langSel.disabled = false;
   toggleLabel.textContent = 'Tap to listen';
