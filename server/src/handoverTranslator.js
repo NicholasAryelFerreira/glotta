@@ -20,23 +20,42 @@ export const HANDOVER_STANDBY_PAUSE_MS = 250;
 export const HANDOVER_SILENCE_RMS = 328;
 const OUTPUT_SAMPLE_RATE = 24_000;
 
-/** True when a base64 PCM16 chunk is quiet enough to switch streams during it. */
-export function pcm16Base64IsSilent(base64Chunk, threshold = HANDOVER_SILENCE_RMS) {
-  if (typeof base64Chunk !== 'string' || !base64Chunk) return true;
+// Enough per-chunk levels for a 50 second handover at four chunks per second.
+const MAX_LEVEL_SAMPLES = 400;
+
+/** Root-mean-square level of a base64 PCM16 chunk; 0 when empty. */
+export function pcm16Base64Rms(base64Chunk) {
+  if (typeof base64Chunk !== 'string' || !base64Chunk) return 0;
   const pcm = Buffer.from(base64Chunk, 'base64');
   const samples = Math.floor(pcm.length / 2);
-  if (samples === 0) return true;
+  if (samples === 0) return 0;
   let sumOfSquares = 0;
   for (let offset = 0; offset < samples * 2; offset += 2) {
     const sample = pcm.readInt16LE(offset);
     sumOfSquares += sample * sample;
   }
-  return Math.sqrt(sumOfSquares / samples) < threshold;
+  return Math.sqrt(sumOfSquares / samples);
 }
 
-function trailingSilenceMs(previousMs, base64Chunk) {
-  if (!pcm16Base64IsSilent(base64Chunk)) return 0;
-  return previousMs + pcm16Base64DurationMs(base64Chunk, OUTPUT_SAMPLE_RATE);
+/** True when a base64 PCM16 chunk is quiet enough to switch streams during it. */
+export function pcm16Base64IsSilent(base64Chunk, threshold = HANDOVER_SILENCE_RMS) {
+  return pcm16Base64Rms(base64Chunk) < threshold;
+}
+
+function rmsToDbfs(rms) {
+  if (!(rms > 0)) return -120;
+  return Math.max(-120, Math.round(20 * Math.log10(rms / 32_768) * 10) / 10);
+}
+
+function levelSummary(levels) {
+  if (levels.length === 0) return null;
+  const sorted = [...levels].sort((a, b) => a - b);
+  const at = (fraction) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
+  return { p10: at(0.1), p50: at(0.5), p90: at(0.9) };
+}
+
+function recordLevel(levels, dbfs) {
+  if (levels.length < MAX_LEVEL_SAMPLES) levels.push(dbfs);
 }
 
 /**
@@ -106,13 +125,21 @@ export class HandoverTranslator {
     if (stream === this.active) {
       this.options.onAudio?.(data);
       if (!handover) return;
-      handover.activeSilenceMs = trailingSilenceMs(handover.activeSilenceMs, data);
+      const rms = pcm16Base64Rms(data);
+      handover.activeSilenceMs = rms < HANDOVER_SILENCE_RMS
+        ? handover.activeSilenceMs + pcm16Base64DurationMs(data, OUTPUT_SAMPLE_RATE)
+        : 0;
+      recordLevel(handover.activeLevels, rmsToDbfs(rms));
       this.#switchAtPause(handover);
       return;
     }
     if (stream !== handover?.stream) return;
     if (handover.firstAudioAt === null) handover.firstAudioAt = Date.now();
-    handover.standbySilenceMs = trailingSilenceMs(handover.standbySilenceMs, data);
+    const rms = pcm16Base64Rms(data);
+    handover.standbySilenceMs = rms < HANDOVER_SILENCE_RMS
+      ? handover.standbySilenceMs + pcm16Base64DurationMs(data, OUTPUT_SAMPLE_RATE)
+      : 0;
+    recordLevel(handover.standbyLevels, rmsToDbfs(rms));
     this.#switchAtPause(handover);
     // Forward the quiet chunk that completed the switch so listener playback
     // keeps an even timeline.
@@ -165,6 +192,9 @@ export class HandoverTranslator {
       standbyOutputs: 0,
       activeSilenceMs: 0,
       standbySilenceMs: 0,
+      activeLevels: [],
+      standbyLevels: [],
+      bestPauseDbfs: null,
       deadlineTimer: null,
     };
     this.handover = handover;
@@ -206,9 +236,21 @@ export class HandoverTranslator {
     if (this.handover !== handover || handover.readyAt === null) return;
     if (Date.now() - handover.readyAt < HANDOVER_MIN_WARMUP_MS) return;
     if (!this.#standbyCanTakeOver(handover)) return;
+    this.#recordPauseCandidate(handover);
     if (handover.activeSilenceMs < HANDOVER_ACTIVE_PAUSE_MS) return;
     if (handover.standbySilenceMs < HANDOVER_STANDBY_PAUSE_MS) return;
     this.#completeHandover(handover, 'pause');
+  }
+
+  // Diagnostic only: the quietest moment that met every other switch
+  // condition, i.e. the loudest of the old stream's last two chunks and the
+  // standby's last chunk. It shows which threshold would have found a pause.
+  #recordPauseCandidate(handover) {
+    const active = handover.activeLevels;
+    const standby = handover.standbyLevels;
+    if (active.length < 2 || standby.length < 1) return;
+    const level = Math.max(active.at(-1), active.at(-2), standby.at(-1));
+    if (handover.bestPauseDbfs === null || level < handover.bestPauseDbfs) handover.bestPauseDbfs = level;
   }
 
   #completeHandover(handover, reason) {
@@ -250,6 +292,10 @@ export class HandoverTranslator {
       warmupMs: handover.readyAt === null ? null : now - handover.readyAt,
       activeOutputTranscripts: handover.activeOutputs,
       standbyOutputTranscripts: handover.standbyOutputs,
+      pauseThresholdDbfs: rmsToDbfs(HANDOVER_SILENCE_RMS),
+      bestPauseDbfs: handover.bestPauseDbfs,
+      activeLevelDbfs: levelSummary(handover.activeLevels),
+      standbyLevelDbfs: levelSummary(handover.standbyLevels),
     });
   }
 }

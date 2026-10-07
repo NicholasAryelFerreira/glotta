@@ -168,6 +168,12 @@ test('listeners move to a warmed standby at a pause without a reconnect status',
   assert.equal(complete.event, 'gemini-handover-complete');
   assert.equal(complete.reason, 'pause');
   assert.equal(complete.standbyOutputTranscripts, 1);
+  // Level diagnostics ride on the existing result line instead of new lines.
+  assert.equal(complete.pauseThresholdDbfs, -40);
+  assert.equal(complete.bestPauseDbfs, -120);
+  assert.deepEqual(complete.activeLevelDbfs, { p10: -120, p50: -120, p90: -12.2 });
+  assert.deepEqual(complete.standbyLevelDbfs, { p10: -120, p50: -120, p90: -12.2 });
+  assert.equal(handoverEvents().length, 2);
 
   // The cleared deadline cannot fire later, and the next GoAway starts again.
   context.mock.timers.tick(60_000);
