@@ -128,6 +128,22 @@ export function geminiSetupMessage({
   };
 }
 
+/** GoAway.timeLeft is a protobuf Duration, e.g. "50s"; null when unreadable. */
+export function goAwayTimeLeftMs(timeLeft) {
+  if (typeof timeLeft === 'string') {
+    const match = timeLeft.trim().match(/^(\d+(?:\.\d+)?)s$/);
+    return match ? Math.round(Number(match[1]) * 1000) : null;
+  }
+  if (timeLeft && typeof timeLeft === 'object' && ('seconds' in timeLeft || 'nanos' in timeLeft)) {
+    const seconds = Number(timeLeft.seconds ?? 0);
+    const nanos = Number(timeLeft.nanos ?? 0);
+    if (Number.isFinite(seconds) && Number.isFinite(nanos) && seconds >= 0 && nanos >= 0) {
+      return Math.round(seconds * 1000 + nanos / 1_000_000);
+    }
+  }
+  return null;
+}
+
 export function transcriptionEvents(content = {}, streamMode = 'translation') {
   const events = [];
   if (streamMode === 'transcription') {
@@ -168,6 +184,7 @@ export class Translator {
    * @param {(kind: 'input'|'input-interim'|'input-final'|'output', text: string) => void} opts.onTranscript
    * @param {(err: Error) => void} opts.onError
    * @param {(state: 'translator-online'|'translator-reconnecting') => void} [opts.onStatus]
+   * @param {(goAway: { timeLeftMs: number|null }) => void} [opts.onGoAway]
    * @param {string} [opts.sessionId]
    * @param {string} [opts.streamKind]
    * @param {string} [opts.provider]
@@ -175,6 +192,7 @@ export class Translator {
    * @param {'translation'|'transcription'} [opts.streamMode]
    * @param {boolean} [opts.inputAudioTranscription]
    * @param {boolean} [opts.outputAudioTranscription]
+   * @param {string} [opts.wsBase] Test-only WebSocket origin override
    */
   constructor({
     apiKey,
@@ -184,6 +202,7 @@ export class Translator {
     onTranscript,
     onError,
     onStatus,
+    onGoAway,
     sessionId = 'unknown',
     streamKind = 'listener',
     provider = 'gemini',
@@ -191,6 +210,7 @@ export class Translator {
     streamMode = 'translation',
     inputAudioTranscription = true,
     outputAudioTranscription = true,
+    wsBase = WS_BASE,
   }) {
     this.apiKey = apiKey;
     this.targetLanguage = targetLanguage;
@@ -199,6 +219,8 @@ export class Translator {
     this.onTranscript = onTranscript;
     this.onError = onError;
     this.onStatus = onStatus;
+    this.onGoAway = onGoAway;
+    this.wsBase = wsBase;
     this.sessionId = sessionId;
     this.streamKind = streamKind;
     this.provider = provider;
@@ -237,7 +259,7 @@ export class Translator {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
       this.goAwayReceived = false;
-      const url = `${WS_BASE}/ws/google.ai.generativelanguage.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+      const url = `${this.wsBase}/ws/google.ai.generativelanguage.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
       const ws = new WebSocket(url);
       this.ws = ws;
       let settled = false;
@@ -375,6 +397,7 @@ export class Translator {
         connection: this.connectionNumber,
         timeLeft,
       });
+      this.onGoAway?.({ timeLeftMs: goAwayTimeLeftMs(timeLeft) });
     }
   }
 

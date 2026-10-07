@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { HandoverTranslator } from './handoverTranslator.js';
 import { OpenAITranslator } from './openaiTranslator.js';
 import { Translator } from './translator.js';
 import {
@@ -824,7 +825,9 @@ export class SessionManager {
   createTranslator(provider, options) {
     const normalized = normalizeProvider(provider);
     const apiTier = normalizeApiTier(options.apiTier, normalized);
-    const TranslatorClass = normalized === 'openai' ? OpenAITranslator : Translator;
+    // Gemini listener streams warm a replacement connection before each
+    // GoAway close. Speaker captions use createTranscriptStream instead.
+    const TranslatorClass = normalized === 'openai' ? OpenAITranslator : HandoverTranslator;
     return new TranslatorClass({
       ...options,
       apiKey: this.apiKeyForProvider(normalized, apiTier),
