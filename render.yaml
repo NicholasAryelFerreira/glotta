@@ -20,3 +20,21 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      # Sermon transcript email. Off unless BREVO_API_KEY, SERMON_EMAIL_TO,
+      # SERMON_EMAIL_FROM and SERMON_WINDOWS are set; values live in the dashboard.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: SERMON_EMAIL_TO
+        sync: false
+      - key: SERMON_EMAIL_FROM
+        sync: false
+      - key: SERMON_EMAIL_FROM_NAME
+        sync: false
+      - key: SERMON_TIMEZONE
+        sync: false
+      - key: SERMON_WINDOWS
+        sync: false
+      - key: SERMON_TRIM_MODEL
+        sync: false
+      - key: SERMON_TRIM_PROMPT
+        sync: false

@@ -430,6 +430,12 @@ class Session {
     }
     this.speakerTranscriptWatchdog.recordTranscript();
     this.sendToSpeaker({ type: 'transcript', kind, text });
+    try {
+      this.manager.sermonArchive?.record(this.id, kind, text);
+    } catch (err) {
+      // The emailed sermon transcript must never affect live captions.
+      console.error(`[sermon-transcript] record failed: ${err.message}`);
+    }
   }
 
   #activeTranscriptChannel() {
@@ -791,6 +797,7 @@ export class SessionManager {
           openai: apiKeys?.openai,
         };
     this.sessions = new Map(); // id -> Session
+    this.sermonArchive = null; // collects the weekly session's transcript for email
   }
 
   hasProvider(provider) {

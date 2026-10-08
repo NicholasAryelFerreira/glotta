@@ -14,6 +14,7 @@ import {
   SessionManager,
 } from './sessionManager.js';
 import { isSupportedLanguage, languagesForProvider } from './languages.js';
+import { createSermonTranscriptArchive } from './sermonTranscript.js';
 import {
   LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS,
   LIVE_EDGE_MAX_QUEUE_SECONDS,
@@ -64,6 +65,12 @@ if (!isValidSessionId(WEEKLY_SESSION_ID)) {
 const SPEAKER_GRACE_MS = 5 * 60_000;
 
 const manager = new SessionManager(API_KEYS);
+// Emails the weekly session's sermon transcript after each configured Sunday
+// service window. Off unless the Brevo and SERMON_* settings are present.
+manager.sermonArchive = createSermonTranscriptArchive({
+  weeklySessionId: WEEKLY_SESSION_ID,
+  apiKeys: API_KEYS,
+});
 const app = express();
 // Render (and most cloud hosts) put us behind a TLS-terminating proxy, so trust
 // X-Forwarded-Proto/Host to build correct https:// join links and QR codes.
@@ -74,6 +81,12 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 function baseUrl(req) {
   return process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
 }
+
+// Lightweight request target that keeps a sleeping-prone host awake while a
+// sermon transcript is waiting to be emailed.
+app.get('/healthz', (_req, res) => {
+  res.type('text/plain').send('ok');
+});
 
 app.get('/api/languages', (req, res) => {
   const provider = normalizeProvider(req.query.provider);

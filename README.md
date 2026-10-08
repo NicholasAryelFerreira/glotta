@@ -17,6 +17,7 @@ Glotta is a real-time translation platform for lectures, trainings, sermons, and
 - Supports multiple listener languages at the same time, with one shared provider stream per language.
 - Lets listeners join from a browser without installing an app.
 - Shows the speaker live listener counts, an audio input meter, and a bounded source transcript.
+- Optionally emails the weekly sermon's transcript after each Sunday service, trimmed to the sermon by a Gemini or OpenAI model.
 
 ## How it works
 
@@ -38,7 +39,7 @@ The browser landing page shows a Google Gemini/OpenAI GPT selector below the wee
 | Google Gemini | 70+ | Listener audio/captions use `gemini-3.5-live-translate-preview` only for active listener languages. Production speaker captions use `gemini-3.5-transcribe-live`; Testing keeps the free Live Translate stream. |
 | OpenAI GPT | 13 | Uses `gpt-realtime-translate`, which automatically detects 70+ spoken input languages. Production only. |
 
-The browser sends the selected provider and session mode to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. The provider and session mode are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
+The browser sends the selected provider and session mode to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. If the sermon transcript email is configured, the weekly session's speaker transcript is also held in memory during the service windows until it is emailed, then erased. The provider and session mode are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
 
 ## Repository layout
 
@@ -118,6 +119,28 @@ PUBLIC_BASE_URL=https://your-public-url.example.com
 ```
 
 The relay server stores live sessions in memory, so free-tier hosts that sleep or restart can interrupt active sessions. The speaker page includes session revival logic to recreate the same QR code when possible, but a production deployment should use a host that stays awake during services.
+
+## Sermon transcript email
+
+When configured, Glotta collects the weekly session's speaker transcript during the Sunday service windows and emails the sermon once per window, 10 minutes after the window ends, whether the session has ended, is still live, or was restarted in between.
+
+- Only the weekly session code (`WEEKLY_SESSION_ID`, default `SERMON`) is collected, and only inside `SERMON_WINDOWS`. Collecting stops at the end of a window; a live session keeps running untouched.
+- `SERMON_TRIM_MODEL` returns only the numbers of the sermon's first and last sentences, and the server cuts the original transcript there, so the email contains the transcript's own words. If the model is unsure or fails, the full window transcript is sent with a note.
+- The transcript lives only in memory and is erased after the email is sent. A failed send is retried every 5 minutes for 30 minutes, then the transcript is erased. A server restart also erases it; if the server started during a window, the email says so.
+- While a transcript is waiting, the server requests its own `/healthz` page every 5 minutes so Render's free plan does not put it to sleep before the email is sent.
+
+| Setting | Example | Purpose |
+| --- | --- | --- |
+| `BREVO_API_KEY` | `xkeysib-...` | Brevo API key used to send the email. |
+| `SERMON_EMAIL_TO` | `you@example.com` | Recipient; separate several with commas. |
+| `SERMON_EMAIL_FROM` | `you@example.com` | Sender; must be verified in Brevo. |
+| `SERMON_EMAIL_FROM_NAME` | `Glotta` | Sender name (default `Glotta`). |
+| `SERMON_TIMEZONE` | `America/Chicago` | Time zone of the windows (default `America/Chicago`). |
+| `SERMON_WINDOWS` | `Sun 11:00-12:20, Sun 18:10-19:20` | Service windows, 24-hour local time. |
+| `SERMON_TRIM_MODEL` | `gemini-3.5-flash` | Gemini (`gemini-...`) or OpenAI (`gpt-...`, `o4-mini`) model; uses the existing paid Gemini or OpenAI key. |
+| `SERMON_TRIM_PROMPT` | | What counts as the sermon; a built-in default is used if unset. The reply format is added by the server. |
+
+The email feature is off unless `BREVO_API_KEY`, `SERMON_EMAIL_TO`, `SERMON_EMAIL_FROM`, and `SERMON_WINDOWS` are set.
 
 ## Reliability details
 
