@@ -6,6 +6,7 @@ export async function sendBrevoEmail({
   apiKey,
   from,
   to,
+  bcc = [],
   subject,
   text,
   html,
@@ -22,6 +23,7 @@ export async function sendBrevoEmail({
     body: JSON.stringify({
       sender: { email: from.email, name: from.name },
       to: to.map((email) => ({ email })),
+      ...(bcc.length ? { bcc: bcc.map((email) => ({ email })) } : {}),
       subject,
       htmlContent: html,
       textContent: text,

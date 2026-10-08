@@ -26,6 +26,8 @@ services:
         sync: false
       - key: SERMON_EMAIL_TO
         sync: false
+      - key: SERMON_EMAIL_COPY_TO
+        sync: false
       - key: SERMON_EMAIL_FROM
         sync: false
       - key: SERMON_EMAIL_FROM_NAME

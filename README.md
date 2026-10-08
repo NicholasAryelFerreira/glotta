@@ -125,14 +125,16 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 When configured, Glotta collects the weekly session's speaker transcript during the Sunday service windows and emails the sermon once per window, 10 minutes after the window ends, whether the session has ended, is still live, or was restarted in between.
 
 - Only the weekly session code (`WEEKLY_SESSION_ID`, default `SERMON`) is collected, and only inside `SERMON_WINDOWS`. Collecting stops at the end of a window; a live session keeps running untouched.
-- `SERMON_TRIM_MODEL` returns only the numbers of the sermon's first and last sentences, and the server cuts the original transcript there, so the email contains the transcript's own words. If the model is unsure or fails, the full window transcript is sent with a note.
-- The transcript lives only in memory and is erased after the email is sent. A failed send is retried every 5 minutes for 30 minutes, then the transcript is erased. A server restart also erases it; if the server started during a window, the email says so.
+- `SERMON_TRIM_MODEL` returns only the numbers of the sermon's first and last sentences, and the server cuts the original transcript there, so the email contains the transcript's own words. If the model is unsure or fails, the full window transcript is sent instead.
+- The email contains only a title such as "Sunday Morning Sermon – October 11, 2026" and the transcript. Technical details (the trim result, a server start during a window, a size-limit cut) go to the `[sermon-transcript] sent` log line instead.
+- The transcript lives only in memory and is erased after the email is sent. A failed send is retried every 5 minutes for 30 minutes, then the transcript is erased. A server restart also erases it.
 - While a transcript is waiting, the server requests its own `/healthz` page every 5 minutes so Render's free plan does not put it to sleep before the email is sent.
 
 | Setting | Example | Purpose |
 | --- | --- | --- |
 | `BREVO_API_KEY` | `xkeysib-...` | Brevo API key used to send the email. |
 | `SERMON_EMAIL_TO` | `you@example.com` | Recipient; separate several with commas. |
+| `SERMON_EMAIL_COPY_TO` | `you@example.com` | Optional hidden copy (BCC) of every email; an address already in `SERMON_EMAIL_TO` is skipped. |
 | `SERMON_EMAIL_FROM` | `you@example.com` | Sender; must be verified in Brevo. |
 | `SERMON_EMAIL_FROM_NAME` | `Glotta` | Sender name (default `Glotta`). |
 | `SERMON_TIMEZONE` | `America/Chicago` | Time zone of the windows (default `America/Chicago`). |

@@ -45,20 +45,26 @@ function hhmm(minutes) {
   return `${twoDigits(Math.floor(minutes / 60))}:${twoDigits(minutes % 60)}`;
 }
 
-function clockLabel(minutes) {
-  const hour = Math.floor(minutes / 60);
-  return `${hour % 12 || 12}:${twoDigits(minutes % 60)} ${hour < 12 ? 'AM' : 'PM'}`;
-}
-
 function dateLabel(dateKey) {
   const [year, month, day] = dateKey.split('-').map(Number);
   return new Intl.DateTimeFormat('en-US', {
     timeZone: 'UTC',
-    weekday: 'long',
     month: 'long',
     day: 'numeric',
     year: 'numeric',
   }).format(Date.UTC(year, month - 1, day));
+}
+
+function partOfDay(minutes) {
+  if (minutes < 12 * 60) return 'Morning';
+  if (minutes < 17 * 60) return 'Afternoon';
+  return 'Evening';
+}
+
+/** The email's subject and heading, e.g. "Sunday Morning Sermon – October 11, 2026". */
+export function sermonTitle(dateKey, window) {
+  const day = DAY_NAMES[window.day];
+  return `${day[0].toUpperCase()}${day.slice(1)} ${partOfDay(window.startMin)} Sermon – ${dateLabel(dateKey)}`;
 }
 
 function wordCount(text) {
@@ -173,61 +179,20 @@ function escapeHtml(text) {
     .replaceAll("'", '&#39;');
 }
 
-/** Subject, plain text, and HTML for one service window's email. */
-export function composeSermonEmail({
-  dateKey,
-  window,
-  paragraphs,
-  trim,
-  serverStartedMinutes = null,
-  truncated = false,
-}) {
-  const date = dateLabel(dateKey);
-  const start = clockLabel(window.startMin);
-  const end = clockLabel(window.endMin);
-  const trimmed = trim?.status === 'trimmed';
-  const notes = [];
-  if (!trimmed) {
-    notes.push('Glotta could not confidently find where the sermon starts and ends, '
-      + 'so this is the full transcript of the service window.');
-  }
-  if (serverStartedMinutes !== null) {
-    notes.push(`Glotta's server started at ${clockLabel(serverStartedMinutes)}, during this service `
-      + 'window. If the service had already begun, anything said before then is missing.');
-  }
-  if (truncated) notes.push('The transcript reached its size limit, so its end is missing.');
-  const origin = trimmed
-    ? `Trimmed to the sermon automatically with ${trim.model}.`
-    : `Full service window ${start}–${end}, not trimmed.`;
-  const footer = 'Sent automatically by Glotta from the live speaker transcript. '
-    + `Automatic transcription can contain errors. ${origin}`;
-  const heading = `${date} · ${start}–${end} service`;
-
-  const text = [
-    'Sermon transcript',
-    heading,
-    '',
-    ...notes.flatMap((note) => [note, '']),
-    paragraphs.join('\n\n'),
-    '',
-    '—',
-    footer,
-  ].join('\n');
-
+/**
+ * Subject, plain text, and HTML for one service window's email: the title and
+ * the transcript only. Technical details go to the logs instead.
+ */
+export function composeSermonEmail({ dateKey, window, paragraphs }) {
+  const title = sermonTitle(dateKey, window);
+  const text = [title, '', paragraphs.join('\n\n')].join('\n');
   const html = [
     '<div style="font-family:Georgia,\'Times New Roman\',serif;font-size:16px;line-height:1.6;color:#1f2933;max-width:680px">',
-    '<h1 style="font-size:22px;margin:0 0 4px">Sermon transcript</h1>',
-    `<p style="margin:0 0 20px;color:#52606d;font-size:14px">${escapeHtml(heading)}</p>`,
-    ...notes.map((note) => (
-      '<p style="margin:0 0 16px;padding:8px 12px;background:#fff8e1;border-left:3px solid #f0b429;font-size:14px">'
-      + `${escapeHtml(note)}</p>`
-    )),
+    `<h1 style="font-size:22px;margin:0 0 20px">${escapeHtml(title)}</h1>`,
     ...paragraphs.map((paragraph) => `<p style="margin:0 0 14px">${escapeHtml(paragraph)}</p>`),
-    `<p style="margin:28px 0 0;color:#7b8794;font-size:13px">${escapeHtml(footer)}</p>`,
     '</div>',
   ].join('\n');
-
-  return { subject: `Sermon transcript – ${date}, ${start}`, text, html };
+  return { subject: title, text, html };
 }
 
 export class SermonTranscriptArchive {
@@ -255,7 +220,6 @@ export class SermonTranscriptArchive {
     const startClock = localClock(this.startedAt, timeZone);
     const startWindow = findWindow(windows, startClock);
     this.startedInWindowKey = startWindow ? this.#windowKey(startClock, startWindow) : null;
-    this.startedMinutes = startClock.minutes;
   }
 
   start() {
@@ -341,7 +305,7 @@ export class SermonTranscriptArchive {
       lastPieceAt: null,
       resumedAt: null,
       truncated: false,
-      serverStartedMinutes: this.startedInWindowKey === key ? this.startedMinutes : null,
+      serverStartedInWindow: this.startedInWindowKey === key,
       busy: false,
       attempts: 0,
       email: null,
@@ -350,7 +314,7 @@ export class SermonTranscriptArchive {
     logSermonEvent('collecting', {
       window: key,
       sendAt: new Date(sendAt).toISOString(),
-      serverStartedInWindow: entry.serverStartedMinutes !== null,
+      serverStartedInWindow: entry.serverStartedInWindow,
     });
     return entry;
   }
@@ -388,14 +352,7 @@ export class SermonTranscriptArchive {
       trim = { status: 'full', reason: 'model-error', error: err.message };
     }
     const body = trim?.status === 'trimmed' ? trim.paragraphs : paragraphs;
-    const message = composeSermonEmail({
-      dateKey: entry.dateKey,
-      window: entry.window,
-      paragraphs: body,
-      trim,
-      serverStartedMinutes: entry.serverStartedMinutes,
-      truncated: entry.truncated,
-    });
+    const message = composeSermonEmail({ dateKey: entry.dateKey, window: entry.window, paragraphs: body });
     const summary = {
       pieces: entry.pieces.length,
       transcriptWords: paragraphs.reduce((total, paragraph) => total + wordCount(paragraph), 0),
@@ -404,7 +361,8 @@ export class SermonTranscriptArchive {
       trimReason: trim?.reason ?? null,
       trimModel: trim?.model ?? null,
       trimError: trim?.error ?? null,
-      partial: entry.serverStartedMinutes !== null,
+      serverStartedInWindow: entry.serverStartedInWindow,
+      truncated: entry.truncated,
     };
     // Only the composed email is kept until it is sent.
     entry.pieces = [];
@@ -438,8 +396,16 @@ export function createSermonTranscriptArchive({
   const { windows, invalid } = parseSermonWindows(value('SERMON_WINDOWS'));
   if (invalid.length) console.error(`[sermon-transcript] ignoring SERMON_WINDOWS entries: ${invalid.join(', ')}`);
   if (windows.length === 0) return off('no valid SERMON_WINDOWS');
-  const recipients = value('SERMON_EMAIL_TO').split(/[\s,;]+/).filter(Boolean);
-  if (recipients.some((email) => !/^[^@\s]+@[^@\s]+$/.test(email))) return off('invalid SERMON_EMAIL_TO address');
+  const addresses = (name) => value(name).split(/[\s,;]+/).filter(Boolean);
+  const isAddress = (email) => /^[^@\s]+@[^@\s]+$/.test(email);
+  const recipients = addresses('SERMON_EMAIL_TO');
+  if (!recipients.every(isAddress)) return off('invalid SERMON_EMAIL_TO address');
+  // Optional hidden copy of every email; an address already in To is skipped.
+  const copyAddresses = addresses('SERMON_EMAIL_COPY_TO');
+  if (!copyAddresses.every(isAddress)) console.error('[sermon-transcript] ignoring invalid SERMON_EMAIL_COPY_TO address');
+  const bcc = copyAddresses.filter((email) => (
+    isAddress(email) && !recipients.some((to) => to.toLowerCase() === email.toLowerCase())
+  ));
 
   const from = { email: value('SERMON_EMAIL_FROM'), name: value('SERMON_EMAIL_FROM_NAME') || 'Glotta' };
   const model = value('SERMON_TRIM_MODEL') || DEFAULT_SERMON_TRIM_MODEL;
@@ -467,13 +433,14 @@ export function createSermonTranscriptArchive({
       apiKey: brevoApiKey,
       from,
       to: recipients,
+      bcc,
       ...message,
       fetchImpl,
     }),
   });
   console.log(
     `[sermon-transcript] email on (windows: ${windows.map((window) => window.label).join(', ')} ${timeZone}; `
-    + `recipients: ${recipients.length}; trim model: ${model}; `
+    + `recipients: ${recipients.length}; copies: ${bcc.length}; trim model: ${model}; `
     + `prompt: ${value('SERMON_TRIM_PROMPT') ? 'custom' : 'default'}; keep-awake: ${publicUrl ? 'on' : 'off'})`,
   );
   if (start) archive.start();

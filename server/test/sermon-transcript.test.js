@@ -120,16 +120,15 @@ test('one email is sent ten minutes after the window ends, combining every sessi
   await archive.tick();
   assert.equal(sent.length, 1);
   assert.equal(archive.entries.size, 0, 'erased once sent');
-  assert.equal(sent[0].subject, 'Sermon transcript – Sunday, October 11, 2026, 11:00 AM');
-  assert.match(sent[0].text, /After a restart\./);
-  assert.doesNotMatch(sent[0].text, /Opening words/, 'the trimmed paragraphs are sent');
-  assert.doesNotMatch(sent[0].text, /Still talking/);
-  assert.match(sent[0].text, /Trimmed to the sermon automatically with test-model\./);
+  // Only the title and the trimmed transcript: no technical notes.
+  assert.equal(sent[0].subject, 'Sunday Morning Sermon – October 11, 2026');
+  assert.equal(sent[0].text, 'Sunday Morning Sermon – October 11, 2026\n\nAfter a restart.');
 
   at(SUNDAY_11AM + 200 * MINUTE);
   await archive.tick();
   assert.equal(sent.length, 1, 'never a second email for the window');
-  assert.ok(lines.some((line) => line.includes('"event":"sent"')));
+  const sentLog = lines.find((line) => line.includes('"event":"sent"'));
+  assert.match(sentLog, /"trim":"trimmed","trimReason":null,"trimModel":"test-model"/);
   assert.ok(lines.every((line) => !line.includes(SECRET_WORDS)), 'transcript text is never logged');
 });
 
@@ -143,7 +142,8 @@ test('the evening window gets its own email', async (context) => {
   at(Date.parse('2026-10-12T00:30:00Z')); // 7:30 PM
   await archive.tick();
   assert.equal(sent.length, 2);
-  assert.match(sent[1].subject, /6:10 PM$/);
+  assert.equal(sent[0].subject, 'Sunday Morning Sermon – October 11, 2026');
+  assert.equal(sent[1].subject, 'Sunday Evening Sermon – October 11, 2026');
 });
 
 test('a failed send retries, then the transcript is discarded', async (context) => {
@@ -185,16 +185,21 @@ test('the server is kept awake only while a transcript is waiting', async (conte
   assert.equal(keepAwake.length, 19, 'no more requests after the email is sent');
 });
 
-test('a server start inside a window is noted in the email', async (context) => {
-  const { archive, sent, at } = archiveHarness(context, { start: SUNDAY_11AM + 42 * MINUTE });
+test('a server start inside a window is logged, not emailed', async (context) => {
+  const { archive, sent, lines, at } = archiveHarness(context, {
+    start: SUNDAY_11AM + 42 * MINUTE,
+    trimTranscript: async (paragraphs) => ({ status: 'trimmed', model: 'test-model', paragraphs }),
+  });
   archive.record('SERMON', 'input-final', 'Words.');
   at(SUNDAY_11AM + 90 * MINUTE);
   await archive.tick();
-  assert.match(sent[0].text, /server started at 11:42 AM, during this service window/);
+  assert.equal(sent[0].text, 'Sunday Morning Sermon – October 11, 2026\n\nWords.');
+  const sentLog = lines.find((line) => line.includes('"event":"sent"'));
+  assert.match(sentLog, /"serverStartedInWindow":true,"truncated":false/);
 });
 
-test('if trimming fails the full transcript is sent with a note', async (context) => {
-  const { archive, sent, at } = archiveHarness(context, {
+test('if trimming fails the full transcript is sent and the reason is logged', async (context) => {
+  const { archive, sent, lines, at } = archiveHarness(context, {
     trimTranscript: async () => ({ status: 'full', reason: 'model-error', model: 'gemini-x', error: 'Gemini 404' }),
   });
   at(SUNDAY_11AM + 5 * MINUTE);
@@ -202,9 +207,9 @@ test('if trimming fails the full transcript is sent with a note', async (context
   archive.record('SERMON', 'input-final', ' Sermon.');
   at(SUNDAY_11AM + 90 * MINUTE);
   await archive.tick();
-  assert.match(sent[0].text, /could not confidently find where the sermon starts and ends/);
-  assert.match(sent[0].text, /Welcome\. Sermon\./);
-  assert.match(sent[0].text, /Full service window 11:00 AM–12:20 PM, not trimmed\./);
+  assert.equal(sent[0].text, 'Sunday Morning Sermon – October 11, 2026\n\nWelcome. Sermon.');
+  const sentLog = lines.find((line) => line.includes('"event":"sent"'));
+  assert.match(sentLog, /"trim":"full","trimReason":"model-error","trimModel":"gemini-x","trimError":"Gemini 404"/);
 });
 
 test('paragraphs break at pauses after finished sentences and after long silences', () => {
@@ -234,18 +239,22 @@ test('interim text marks when speech resumed so transcription time is not a paus
   assert.equal(entry.pieces[1].pauseBeforeMs, 500);
 });
 
-test('the email escapes HTML and lists its notes', () => {
+test('the email is the title and the HTML-escaped transcript', () => {
   const email = composeSermonEmail({
     dateKey: '2026-10-11',
     window: WINDOWS[1],
-    paragraphs: ['Faith <and> "works" & love.'],
-    trim: { status: 'trimmed', model: 'gemini-3.5-flash' },
-    serverStartedMinutes: 18 * 60 + 30,
+    paragraphs: ['Faith <and> "works" & love.', 'Second paragraph.'],
   });
-  assert.equal(email.subject, 'Sermon transcript – Sunday, October 11, 2026, 6:10 PM');
+  assert.equal(email.subject, 'Sunday Evening Sermon – October 11, 2026');
+  assert.equal(email.text, 'Sunday Evening Sermon – October 11, 2026\n\nFaith <and> "works" & love.\n\nSecond paragraph.');
+  assert.match(email.html, /<h1[^>]*>Sunday Evening Sermon – October 11, 2026<\/h1>/);
   assert.match(email.html, /Faith &lt;and&gt; &quot;works&quot; &amp; love\./);
-  assert.match(email.html, /server started at 6:30 PM/);
-  assert.match(email.text, /Sunday, October 11, 2026 · 6:10 PM–7:20 PM service/);
+  const weekday = composeSermonEmail({
+    dateKey: '2026-10-08',
+    window: parseSermonWindows('Thu 14:00-14:20').windows[0],
+    paragraphs: ['Test.'],
+  });
+  assert.equal(weekday.subject, 'Thursday Afternoon Sermon – October 8, 2026');
 });
 
 test('the feature stays off until Brevo, recipients, sender, and windows are set', (context) => {
@@ -262,14 +271,20 @@ test('the feature stays off until Brevo, recipients, sender, and windows are set
   assert.equal(createSermonTranscriptArchive({ env: { ...env, SERMON_TIMEZONE: 'Mars/Base' }, start: false }), null);
   assert.equal(createSermonTranscriptArchive({ env: { ...env, SERMON_EMAIL_TO: 'not-an-address' }, start: false }), null);
   const archive = createSermonTranscriptArchive({
-    env: { ...env, SERMON_EMAIL_TO: 'me@example.com, pastor@example.com' },
+    env: {
+      ...env,
+      SERMON_EMAIL_TO: 'me@example.com, pastor@example.com',
+      // An address already in To is not copied twice; an invalid one is ignored.
+      SERMON_EMAIL_COPY_TO: 'ME@example.com, oops',
+    },
     weeklySessionId: 'SERMON',
     start: false,
   });
   assert.ok(archive instanceof SermonTranscriptArchive);
   assert.equal(archive.timeZone, 'America/Chicago');
   const on = lines.find((line) => line.includes('email on'));
-  assert.match(on, /recipients: 2; trim model: gemini-3\.5-flash; prompt: default; keep-awake: off/);
+  assert.match(on, /recipients: 2; copies: 0; trim model: gemini-3\.5-flash; prompt: default; keep-awake: off/);
+  assert.ok(lines.some((line) => line.includes('ignoring invalid SERMON_EMAIL_COPY_TO address')));
   assert.ok(lines.every((line) => !line.includes('brevo-key') && !line.includes('pastor@example.com')));
 });
 
@@ -290,7 +305,8 @@ test('the configured archive trims with the chosen model and sends through Brevo
   const archive = createSermonTranscriptArchive({
     env: {
       BREVO_API_KEY: 'brevo-key',
-      SERMON_EMAIL_TO: 'me@example.com',
+      SERMON_EMAIL_TO: 'pastor@example.com',
+      SERMON_EMAIL_COPY_TO: 'me@example.com',
       SERMON_EMAIL_FROM: 'sender@example.com',
       SERMON_EMAIL_FROM_NAME: 'Glotta',
       SERMON_WINDOWS: 'Sun 11:00-12:20',
@@ -324,8 +340,11 @@ test('the configured archive trims with the chosen model and sends through Brevo
   assert.equal(brevo.init.headers['api-key'], 'brevo-key');
   const email = JSON.parse(brevo.init.body);
   assert.deepEqual(email.sender, { email: 'sender@example.com', name: 'Glotta' });
-  assert.deepEqual(email.to, [{ email: 'me@example.com' }]);
-  assert.match(email.textContent, /Amen\./);
+  assert.deepEqual(email.to, [{ email: 'pastor@example.com' }]);
+  assert.deepEqual(email.bcc, [{ email: 'me@example.com' }], 'a hidden copy goes to the copy address');
+  assert.equal(email.subject, 'Sunday Morning Sermon – October 11, 2026');
+  assert.match(email.textContent, /^Sunday Morning Sermon – October 11, 2026\n\nGrace is a gift/);
+  assert.match(email.textContent, /Amen\.$/);
   assert.doesNotMatch(email.textContent, /Final song/);
   assert.equal(archive.entries.size, 0);
 });
