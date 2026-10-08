@@ -10,7 +10,8 @@ import {
 } from '../src/handoverTranslator.js';
 import { OpenAITranslator } from '../src/openaiTranslator.js';
 import { SessionManager } from '../src/sessionManager.js';
-import { goAwayTimeLeftMs, Translator } from '../src/translator.js';
+import { TranscriptHandoverTranslator } from '../src/transcriptHandover.js';
+import { goAwayTimeLeftMs } from '../src/translator.js';
 
 // 250 ms of 24 kHz PCM16, the chunk size Gemini streams to listeners.
 const SILENT = Buffer.alloc(6_000 * 2).toString('base64');
@@ -95,7 +96,7 @@ test('only Gemini listener streams use the handover wrapper', () => {
   assert.ok(manager.createTranslator('gemini', { targetLanguage: 'es' }) instanceof HandoverTranslator);
   assert.ok(manager.createTranslator('openai', { targetLanguage: 'es' }) instanceof OpenAITranslator);
   const captions = manager.createTranscriptStream('gemini', { targetLanguage: 'en' });
-  assert.ok(captions instanceof Translator);
+  assert.ok(captions instanceof TranscriptHandoverTranslator);
   assert.ok(!(captions instanceof HandoverTranslator));
 });
 

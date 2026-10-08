@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { HandoverTranslator } from './handoverTranslator.js';
 import { OpenAITranslator } from './openaiTranslator.js';
-import { Translator } from './translator.js';
+import { TranscriptHandoverTranslator } from './transcriptHandover.js';
 import {
   ANOMALY_METRIC_LOG_INTERVAL_MS,
   HEALTH_METRIC_LOG_INTERVAL_MS,
@@ -848,7 +848,9 @@ export class SessionManager {
         billingApiTier: apiTier,
       });
     }
-    return new Translator({
+    // Speaker captions hand over to a fresh connection before each GoAway
+    // close, cutting the speaker audio between the two at a pause.
+    return new TranscriptHandoverTranslator({
       ...options,
       // Paid speaker captions use the lower-cost text-only model. Testing
       // retains Live Translate because its Gemini key is on the free tier.
