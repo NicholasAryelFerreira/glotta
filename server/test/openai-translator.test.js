@@ -74,3 +74,23 @@ test('OpenAI graceful close requests a final drain and remains bounded', async (
   assert.equal(socketClosed, true);
   assert.equal(OPENAI_GRACEFUL_CLOSE_TIMEOUT_MS, 2_000);
 });
+
+test('an OpenAI transcription session closes directly, without session.close', async () => {
+  const sent = [];
+  let socketClosed = false;
+  const translator = new OpenAITranslator({
+    apiKey: 'test-key',
+    targetLanguage: 'en',
+    streamMode: 'transcription',
+  });
+  translator.ws = {
+    readyState: 1,
+    send(payload) { sent.push(JSON.parse(payload)); },
+    close() { socketClosed = true; },
+  };
+  translator.ready = true;
+
+  await translator.close({ graceful: true, timeoutMs: 5 });
+  assert.deepEqual(sent, [], 'OpenAI rejects session.close for transcription sessions');
+  assert.equal(socketClosed, true);
+});

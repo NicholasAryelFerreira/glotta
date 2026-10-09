@@ -49,6 +49,10 @@ const LISTENER_AUDIO_BUFFER_LIMIT_BYTES = audioBufferLimitBytes(
   512_000,
 );
 const SPEAKER_TRANSCRIPT_LANGUAGE = 'en';
+// OpenAI's transcription session takes 1-2 seconds to start. Keeping the
+// speaker audio from that time means the transcript (and the emailed sermon)
+// does not lose its first words. Listener streams keep the live-edge limit.
+const OPENAI_TRANSCRIPT_STARTUP_AUDIO_SECONDS = 5;
 const MIN_AUDIO_IDLE_MINUTES = 60;
 const configuredAudioIdleMinutes = Number(process.env.SESSION_AUDIO_IDLE_MINUTES);
 const SESSION_AUDIO_IDLE_MINUTES = Number.isFinite(configuredAudioIdleMinutes)
@@ -850,6 +854,7 @@ export class SessionManager {
       return new OpenAITranslator({
         ...options,
         streamMode: 'transcription',
+        pendingAudioSeconds: OPENAI_TRANSCRIPT_STARTUP_AUDIO_SECONDS,
         apiKey: this.apiKeyForProvider(normalized, apiTier),
         provider: normalized,
         billingApiTier: apiTier,

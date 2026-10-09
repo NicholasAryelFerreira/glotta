@@ -109,8 +109,13 @@ export class OpenAITranslator {
     sessionId = 'unknown',
     streamKind = 'listener',
     streamMode = 'translation',
+    // Audio kept while the connection starts, in seconds. Unset keeps the
+    // live-edge limit; the speaker transcript keeps more so no words are lost.
+    pendingAudioSeconds = null,
+    wsUrl = null, // Test-only WebSocket URL override
   }) {
     this.apiKey = apiKey;
+    this.wsUrl = wsUrl;
     this.targetLanguage = targetLanguage;
     this.onAudio = onAudio;
     this.onTranscript = onTranscript;
@@ -125,6 +130,10 @@ export class OpenAITranslator {
     this.connecting = null;
     this.reconnectAttempts = 0;
     this.pendingAudio = [];
+    this.keepsStartupAudio = pendingAudioSeconds > 0;
+    this.pendingAudioLimit = this.keepsStartupAudio
+      ? Math.round(pendingAudioSeconds * 10)
+      : PENDING_AUDIO_CHUNK_LIMIT;
     this.connectionNumber = 0;
     this.reconnectStartedAt = null;
     this.firstInputAt = null;
@@ -145,7 +154,7 @@ export class OpenAITranslator {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
       const ws = new WebSocket(
-        openAIWebSocketUrl(this.streamMode),
+        this.wsUrl ?? openAIWebSocketUrl(this.streamMode),
         {
           headers: { Authorization: `Bearer ${this.apiKey}` },
         },
@@ -345,7 +354,7 @@ export class OpenAITranslator {
   #queueAudio(base64Chunk) {
     if (this.closedByUs) return;
     this.pendingAudio.push(base64Chunk);
-    if (this.pendingAudio.length > PENDING_AUDIO_CHUNK_LIMIT) {
+    if (this.pendingAudio.length > this.pendingAudioLimit) {
       this.pendingAudio.shift();
       this.droppedPendingChunks += 1;
       this.#logDropMetric('openai-pending', this.pendingAudio.length * 100);
@@ -354,7 +363,12 @@ export class OpenAITranslator {
 
   #flushPendingAudio() {
     const chunks = this.pendingAudio.splice(0);
-    for (const chunk of chunks) this.sendAudio(chunk);
+    for (const chunk of chunks) {
+      // Startup audio kept on purpose is sent whole; the live-edge check would
+      // otherwise drop most of the burst it creates.
+      if (this.keepsStartupAudio) this.#send(chunk);
+      else this.sendAudio(chunk);
+    }
   }
 
   /** @param {string} base64Chunk raw PCM 16-bit / 16 kHz / mono, base64-encoded */
@@ -372,6 +386,10 @@ export class OpenAITranslator {
       );
       return;
     }
+    this.#send(base64Chunk);
+  }
+
+  #send(base64Chunk) {
     try {
       const audio = resamplePcm16Base64(base64Chunk);
       if (!audio) return;
@@ -467,7 +485,9 @@ export class OpenAITranslator {
     this.ready = false;
     this.#logInputAudioUsage('close');
     const ws = this.ws;
-    if (graceful && ws?.readyState === WebSocket.OPEN) {
+    // OpenAI accepts session.close only from translation sessions; a
+    // transcription session answers it with an error, so it closes directly.
+    if (graceful && this.streamMode === 'translation' && ws?.readyState === WebSocket.OPEN) {
       this.closingPromise = new Promise((resolve) => {
         this.closeResolve = resolve;
         this.closeTimer = setTimeout(() => {
