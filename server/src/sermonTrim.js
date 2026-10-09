@@ -70,13 +70,20 @@ function splitLongSentence(sentence) {
   return pieces;
 }
 
+/**
+ * Sentences of one paragraph, split only at spaces after sentence-ending
+ * punctuation, so "3.5" or "U.S." stay intact when sentences are rejoined.
+ */
+export function sentenceTexts(paragraph) {
+  return paragraph.split(/(?<=[.!?…]["”’')\]]*)\s+/).map((text) => text.trim()).filter(Boolean);
+}
+
 /** Sentences of each paragraph, numbered from 1 across the whole transcript. */
 export function splitSentences(paragraphs) {
   const sentences = [];
   paragraphs.forEach((paragraph, index) => {
-    const parts = paragraph.match(/[^.!?…]+(?:[.!?…]+["”’')\]]*|$)/g) ?? [];
-    for (const part of parts) {
-      for (const text of splitLongSentence(part.trim())) {
+    for (const part of sentenceTexts(paragraph)) {
+      for (const text of splitLongSentence(part)) {
         if (text) sentences.push({ paragraph: index, text });
       }
     }

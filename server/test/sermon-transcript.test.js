@@ -222,9 +222,41 @@ test('paragraphs break at pauses after finished sentences and after long silence
     { text: ' after a restart.', pauseBeforeMs: 60_000 },
   ]);
   assert.equal(paragraphs.length, 3);
-  assert.match(paragraphs[1], /^word word word word word\. unfinished thought$/);
-  assert.equal(paragraphs[2], 'after a restart.');
+  assert.equal(paragraphs[1], 'Word word word word word. Unfinished thought');
+  assert.equal(paragraphs[2], 'After a restart.');
   assert.deepEqual(buildParagraphs([{ text: 'One.' }, { text: 'Two,' }, { text: 'three' }]), ['One. Two, three']);
+});
+
+test('finalized phrases are joined with spaces and sentences start with a capital', () => {
+  // Pieces as Live Transcribe sent them in a real test: no spaces between them.
+  const segment = (text) => ({ text, segment: true });
+  assert.deepEqual(buildParagraphs([
+    segment('We have made it to Hebrews 11'),
+    segment("We're going to look at four verses. Hebrews 11."),
+    segment('want to say thanks to everyone. those who have faith'),
+    segment('and preserve their souls'),
+    segment(', amen.'),
+  ]), [
+    "We have made it to Hebrews 11 We're going to look at four verses. Hebrews 11. "
+      + 'Want to say thanks to everyone. Those who have faith and preserve their souls, amen.',
+  ]);
+  // Streamed fragments keep their own spacing and may continue a word.
+  assert.deepEqual(buildParagraphs([{ text: ' Luther went to Witt' }, { text: 'enberg.' }]), ['Luther went to Wittenberg.']);
+  // Abbreviations are not treated as sentence ends.
+  assert.deepEqual(
+    buildParagraphs([segment('The service is at 10 a.m. sharp in the U.S. office. it was good.')]),
+    ['The service is at 10 a.m. sharp in the U.S. office. It was good.'],
+  );
+});
+
+test('long stretches without a pause are split at sentence ends', () => {
+  const paragraphs = buildParagraphs([{ text: `${SERMON_SENTENCES} ${SERMON_SENTENCES}`, segment: true }]);
+  assert.equal(paragraphs.length, 3);
+  for (const paragraph of paragraphs) {
+    assert.ok(paragraph.split(' ').length <= 180, 'no paragraph runs past 180 words');
+    assert.match(paragraph, /^Grace .*receive\.$/);
+  }
+  assert.equal(paragraphs.join(' '), `${SERMON_SENTENCES} ${SERMON_SENTENCES}`);
 });
 
 test('interim text marks when speech resumed so transcription time is not a pause', (context) => {
@@ -363,6 +395,11 @@ test('sentences are numbered across paragraphs and long unpunctuated text is spl
   assert.deepEqual(sentences.slice(0, 4).map((sentence) => sentence.text), ['One.', 'Two?', '"Three!"', 'Four']);
   assert.equal(sentences.length, 4 + 3);
   assert.equal(sentences[4].paragraph, 1);
+  // Only a space after the punctuation ends a sentence, so numbers stay intact.
+  assert.deepEqual(splitSentences(['Version 3.5 is out. It works.']).map((sentence) => sentence.text), [
+    'Version 3.5 is out.',
+    'It works.',
+  ]);
 });
 
 function answer(bounds) {

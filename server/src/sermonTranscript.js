@@ -2,6 +2,7 @@ import { sendBrevoEmail } from './sermonEmail.js';
 import {
   DEFAULT_SERMON_TRIM_MODEL,
   DEFAULT_SERMON_TRIM_PROMPT,
+  sentenceTexts,
   trimModelProvider,
   trimSermon,
 } from './sermonTrim.js';
@@ -22,9 +23,11 @@ const DEFAULT_TIME_ZONE = 'America/Chicago';
 // About six hours of speech, so a runaway stream cannot exhaust memory.
 const MAX_WINDOW_CHARS = 400_000;
 // A new paragraph starts at a pause after a finished sentence, once the
-// current one has a few sentences, or after any long silence.
+// current one has a few sentences, or after any long silence. Longer
+// stretches are split at sentence ends into paragraphs of about TARGET words.
 const PARAGRAPH_PAUSE_MS = 2_500;
 const MIN_PARAGRAPH_WORDS = 25;
+const TARGET_PARAGRAPH_WORDS = 120;
 const MAX_PARAGRAPH_WORDS = 180;
 const LONG_SILENCE_MS = 20_000;
 const FINAL_KINDS = new Set(['input', 'input-final']);
@@ -138,10 +141,49 @@ function findWindow(windows, clock) {
   )) ?? null;
 }
 
-function joinText(current, text) {
-  // Add the space a provider occasionally omits after a sentence or comma.
-  if (/[.!?,;:…]$/.test(current) && /^[\p{L}\p{N}]/u.test(text)) return `${current} ${text}`;
-  return current + text;
+// Live Transcribe finalizes whole phrases but sends them without the space
+// between them. Streamed fragments ('input') carry their own spacing and may
+// continue a word, so they only get the space a provider omits after a
+// sentence or comma.
+function joinText(current, { text, segment }) {
+  if (!current || /\s$/.test(current) || /^\s/.test(text)) return current + text;
+  const addSpace = segment
+    ? !/^[,.;:!?…)\]}”’]/.test(text)
+    : /[.!?,;:…]$/.test(current) && /^[\p{L}\p{N}]/u.test(text);
+  return addSpace ? `${current} ${text}` : current + text;
+}
+
+// Uppercases a sentence's first letter when the transcriber left it
+// lowercase, except after abbreviations such as "a.m.", "e.g." or "U.S.".
+function capitalizeSentences(paragraph) {
+  return paragraph
+    .replace(/^(["“‘'(]*)(\p{Ll})/u, (_, lead, letter) => lead + letter.toUpperCase())
+    .replace(/(\S*[.!?…]["”’')\]]*\s+["“‘'(]*)(\p{Ll})/gu, (match, before, letter) => {
+      const word = before.trim().split(/\s+/)[0].replace(/["”’')\]]+$/u, '');
+      return /^(?:\p{L}\.)+$/u.test(word) ? match : before + letter.toUpperCase();
+    });
+}
+
+function splitLongParagraph(paragraph) {
+  if (wordCount(paragraph) <= MAX_PARAGRAPH_WORDS) return [paragraph];
+  const chunks = [];
+  let sentences = [];
+  let words = 0;
+  for (const sentence of sentenceTexts(paragraph)) {
+    sentences.push(sentence);
+    words += wordCount(sentence);
+    if (words >= TARGET_PARAGRAPH_WORDS) {
+      chunks.push(sentences.join(' '));
+      sentences = [];
+      words = 0;
+    }
+  }
+  if (sentences.length > 0) {
+    // A short remainder stays with the paragraph before it.
+    if (chunks.length > 0 && words < MIN_PARAGRAPH_WORDS) chunks[chunks.length - 1] += ` ${sentences.join(' ')}`;
+    else chunks.push(sentences.join(' '));
+  }
+  return chunks;
 }
 
 /** Joins transcript pieces into readable paragraphs. */
@@ -156,18 +198,20 @@ export function buildParagraphs(pieces) {
       if (
         pause >= LONG_SILENCE_MS
         || (endsSentence && currentWords >= MIN_PARAGRAPH_WORDS && pause >= PARAGRAPH_PAUSE_MS)
-        || (endsSentence && currentWords >= MAX_PARAGRAPH_WORDS)
       ) {
         paragraphs.push(current);
         current = '';
         currentWords = 0;
       }
     }
-    current = joinText(current, piece.text);
+    current = joinText(current, piece);
     currentWords += wordCount(piece.text);
   }
   if (current.trim()) paragraphs.push(current);
-  return paragraphs.map((paragraph) => paragraph.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return paragraphs
+    .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .flatMap((paragraph) => splitLongParagraph(capitalizeSentences(paragraph)));
 }
 
 function escapeHtml(text) {
@@ -260,7 +304,7 @@ export class SermonTranscriptArchive {
       return;
     }
     const pauseBeforeMs = entry.lastPieceAt === null ? 0 : (entry.resumedAt ?? at) - entry.lastPieceAt;
-    entry.pieces.push({ at, text, pauseBeforeMs });
+    entry.pieces.push({ at, text, pauseBeforeMs, segment: kind === 'input-final' });
     entry.chars += text.length;
     entry.lastPieceAt = at;
     entry.resumedAt = null;
