@@ -1,9 +1,10 @@
 import { sendBrevoEmail } from './sermonEmail.js';
+import { DEFAULT_SERMON_PROOFREAD_PROMPT, proofreadSermon } from './sermonProofread.js';
 import {
-  DEFAULT_SERMON_TRIM_MODEL,
+  DEFAULT_SERMON_EMAIL_MODEL,
   DEFAULT_SERMON_TRIM_PROMPT,
+  emailModelProvider,
   sentenceTexts,
-  trimModelProvider,
   trimSermon,
 } from './sermonTrim.js';
 
@@ -245,6 +246,7 @@ export class SermonTranscriptArchive {
     windows,
     timeZone = DEFAULT_TIME_ZONE,
     trimTranscript,
+    proofreadTranscript = null,
     sendEmail,
     keepAwake = () => {},
     now = () => Date.now(),
@@ -253,6 +255,7 @@ export class SermonTranscriptArchive {
     this.windows = windows;
     this.timeZone = timeZone;
     this.trimTranscript = trimTranscript;
+    this.proofreadTranscript = proofreadTranscript;
     this.sendEmail = sendEmail;
     this.keepAwake = keepAwake;
     this.now = now;
@@ -395,7 +398,17 @@ export class SermonTranscriptArchive {
     } catch (err) {
       trim = { status: 'full', reason: 'model-error', error: err.message };
     }
-    const body = trim?.status === 'trimmed' ? trim.paragraphs : paragraphs;
+    let body = trim?.status === 'trimmed' ? trim.paragraphs : paragraphs;
+    let proofread = { proofread: 'off' };
+    if (this.proofreadTranscript) {
+      try {
+        const corrected = await this.proofreadTranscript(body);
+        body = corrected.paragraphs;
+        proofread = corrected.summary;
+      } catch (err) {
+        proofread = { proofread: 'failed', proofreadError: err.message };
+      }
+    }
     const message = composeSermonEmail({ dateKey: entry.dateKey, window: entry.window, paragraphs: body });
     const summary = {
       pieces: entry.pieces.length,
@@ -405,6 +418,7 @@ export class SermonTranscriptArchive {
       trimReason: trim?.reason ?? null,
       trimModel: trim?.model ?? null,
       trimError: trim?.error ?? null,
+      ...proofread,
       serverStartedInWindow: entry.serverStartedInWindow,
       truncated: entry.truncated,
     };
@@ -452,11 +466,14 @@ export function createSermonTranscriptArchive({
   ));
 
   const from = { email: value('SERMON_EMAIL_FROM'), name: value('SERMON_EMAIL_FROM_NAME') || 'Glotta' };
-  const model = value('SERMON_TRIM_MODEL') || DEFAULT_SERMON_TRIM_MODEL;
-  const prompt = value('SERMON_TRIM_PROMPT') || DEFAULT_SERMON_TRIM_PROMPT;
-  if (!trimModelProvider(model).provider) {
-    console.error(`[sermon-transcript] SERMON_TRIM_MODEL "${model}" is not a Gemini or OpenAI model name; `
-      + 'emails will contain the full transcript.');
+  // One model trims the transcript and proofreads the sermon, in separate calls.
+  const model = value('SERMON_EMAIL_MODEL') || DEFAULT_SERMON_EMAIL_MODEL;
+  const trimPrompt = value('SERMON_TRIM_PROMPT') || DEFAULT_SERMON_TRIM_PROMPT;
+  const proofreadOn = !/^(off|false|no|0)$/i.test(value('SERMON_PROOFREAD'));
+  const proofreadPrompt = value('SERMON_PROOFREAD_PROMPT') || DEFAULT_SERMON_PROOFREAD_PROMPT;
+  if (!emailModelProvider(model).provider) {
+    console.error(`[sermon-transcript] SERMON_EMAIL_MODEL "${model}" is not a Gemini or OpenAI model name; `
+      + 'emails will contain the full, uncorrected transcript.');
   }
   const brevoApiKey = value('BREVO_API_KEY');
   const publicUrl = (value('RENDER_EXTERNAL_URL') || value('PUBLIC_BASE_URL')).replace(/\/+$/, '');
@@ -472,7 +489,10 @@ export function createSermonTranscriptArchive({
     timeZone,
     now,
     keepAwake,
-    trimTranscript: (paragraphs) => trimSermon({ paragraphs, model, prompt, apiKeys, fetchImpl }),
+    trimTranscript: (paragraphs) => trimSermon({ paragraphs, model, prompt: trimPrompt, apiKeys, fetchImpl }),
+    proofreadTranscript: proofreadOn
+      ? (paragraphs) => proofreadSermon({ paragraphs, model, prompt: proofreadPrompt, apiKeys, fetchImpl })
+      : null,
     sendEmail: (message) => sendBrevoEmail({
       apiKey: brevoApiKey,
       from,
@@ -484,8 +504,10 @@ export function createSermonTranscriptArchive({
   });
   console.log(
     `[sermon-transcript] email on (windows: ${windows.map((window) => window.label).join(', ')} ${timeZone}; `
-    + `recipients: ${recipients.length}; copies: ${bcc.length}; trim model: ${model}; `
-    + `prompt: ${value('SERMON_TRIM_PROMPT') ? 'custom' : 'default'}; keep-awake: ${publicUrl ? 'on' : 'off'})`,
+    + `recipients: ${recipients.length}; copies: ${bcc.length}; model: ${model}; `
+    + `trim prompt: ${value('SERMON_TRIM_PROMPT') ? 'custom' : 'default'}; `
+    + `proofread: ${proofreadOn ? `on (${value('SERMON_PROOFREAD_PROMPT') ? 'custom' : 'default'} prompt)` : 'off'}; `
+    + `keep-awake: ${publicUrl ? 'on' : 'off'})`,
   );
   if (start) archive.start();
   return archive;

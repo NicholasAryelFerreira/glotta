@@ -14,7 +14,7 @@ import {
 import {
   DEFAULT_SERMON_TRIM_PROMPT,
   splitSentences,
-  trimModelProvider,
+  emailModelProvider,
   trimSermon,
 } from '../src/sermonTrim.js';
 import { SessionManager } from '../src/sessionManager.js';
@@ -315,20 +315,35 @@ test('the feature stays off until Brevo, recipients, sender, and windows are set
   assert.ok(archive instanceof SermonTranscriptArchive);
   assert.equal(archive.timeZone, 'America/Chicago');
   const on = lines.find((line) => line.includes('email on'));
-  assert.match(on, /recipients: 2; copies: 0; trim model: gemini-3\.5-flash; prompt: default; keep-awake: off/);
+  assert.match(
+    on,
+    /recipients: 2; copies: 0; model: gemini-3\.5-flash; trim prompt: default; proofread: on \(default prompt\); keep-awake: off/,
+  );
   assert.ok(lines.some((line) => line.includes('ignoring invalid SERMON_EMAIL_COPY_TO address')));
   assert.ok(lines.every((line) => !line.includes('brevo-key') && !line.includes('pastor@example.com')));
+
+  const off = createSermonTranscriptArchive({
+    env: { ...env, SERMON_EMAIL_MODEL: 'gemini-3.8-flash', SERMON_PROOFREAD: 'OFF' },
+    start: false,
+  });
+  assert.equal(off.proofreadTranscript, null);
+  assert.match(lines.at(-1), /model: gemini-3\.8-flash; trim prompt: default; proofread: off;/);
 });
 
-test('the configured archive trims with the chosen model and sends through Brevo', async (context) => {
-  quietLogs(context);
+test('the configured archive trims and proofreads with one model, then sends through Brevo', async (context) => {
+  const lines = quietLogs(context);
   const requests = [];
+  const geminiAnswer = (reply) => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(reply) }] } }] });
   const fetchImpl = async (url, init = {}) => {
     requests.push({ url, init });
     if (url.includes('generativelanguage')) {
-      return Response.json({
-        candidates: [{ content: { parts: [{ text: JSON.stringify({ found: true, startSentence: 1, endSentence: 31, confidence: 'high' }) }] } }],
-      });
+      const body = JSON.parse(init.body);
+      if (body.generationConfig.responseSchema.properties.paragraphs) {
+        // Proofreading: punctuation-only correction of each paragraph.
+        const paragraphs = JSON.parse(body.contents[0].parts[0].text);
+        return geminiAnswer({ paragraphs: paragraphs.map((paragraph) => paragraph.replace('Amen.', 'Amen!')) });
+      }
+      return geminiAnswer({ found: true, startSentence: 1, endSentence: 31, confidence: 'high' });
     }
     if (url.endsWith('/healthz')) return new Response('ok');
     return Response.json({ messageId: '<id@brevo>' }, { status: 201 });
@@ -342,7 +357,9 @@ test('the configured archive trims with the chosen model and sends through Brevo
       SERMON_EMAIL_FROM: 'sender@example.com',
       SERMON_EMAIL_FROM_NAME: 'Glotta',
       SERMON_WINDOWS: 'Sun 11:00-12:20',
+      SERMON_EMAIL_MODEL: 'gemini-3.8-flash',
       SERMON_TRIM_PROMPT: 'Keep only the sermon.',
+      SERMON_PROOFREAD_PROMPT: 'Fix the misheard words.',
       RENDER_EXTERNAL_URL: 'https://glotta.example.com/',
     },
     weeklySessionId: 'SERMON',
@@ -359,13 +376,19 @@ test('the configured archive trims with the chosen model and sends through Brevo
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(requests[0].url, 'https://glotta.example.com/healthz');
-  const gemini = requests.find(({ url }) => url.includes('generativelanguage'));
-  assert.match(gemini.url, /models\/gemini-3\.5-flash:generateContent$/);
-  assert.equal(gemini.init.headers['x-goog-api-key'], 'gemini-key');
-  const geminiBody = JSON.parse(gemini.init.body);
-  assert.match(geminiBody.systemInstruction.parts[0].text, /^Keep only the sermon\.\n\nThe transcript is split/);
-  assert.match(geminiBody.contents[0].parts[0].text, /^\[1\] Grace is a gift we receive\.$/m);
-  assert.match(geminiBody.contents[0].parts[0].text, /^\[32\] Final song\.$/m);
+  const [trim, proofread, ...more] = requests.filter(({ url }) => url.includes('generativelanguage'));
+  assert.equal(more.length, 0, 'one trim call and one proofreading call for a short sermon');
+  for (const call of [trim, proofread]) {
+    assert.match(call.url, /models\/gemini-3\.8-flash:generateContent$/, 'both calls use SERMON_EMAIL_MODEL');
+    assert.equal(call.init.headers['x-goog-api-key'], 'gemini-key');
+  }
+  const trimBody = JSON.parse(trim.init.body);
+  assert.match(trimBody.systemInstruction.parts[0].text, /^Keep only the sermon\.\n\nThe transcript is split/);
+  assert.match(trimBody.contents[0].parts[0].text, /^\[1\] Grace is a gift we receive\.$/m);
+  assert.match(trimBody.contents[0].parts[0].text, /^\[32\] Final song\.$/m);
+  const proofreadBody = JSON.parse(proofread.init.body);
+  assert.match(proofreadBody.systemInstruction.parts[0].text, /^Fix the misheard words\.\n\nKeep the preacher's own words/);
+  assert.doesNotMatch(proofreadBody.contents[0].parts[0].text, /Final song/, 'only the trimmed sermon is proofread');
 
   const brevo = requests.find(({ url }) => url.includes('brevo'));
   assert.equal(brevo.url, 'https://api.brevo.com/v3/smtp/email');
@@ -376,17 +399,19 @@ test('the configured archive trims with the chosen model and sends through Brevo
   assert.deepEqual(email.bcc, [{ email: 'me@example.com' }], 'a hidden copy goes to the copy address');
   assert.equal(email.subject, 'Sunday Morning Sermon – October 11, 2026');
   assert.match(email.textContent, /^Sunday Morning Sermon – October 11, 2026\n\nGrace is a gift/);
-  assert.match(email.textContent, /Amen\.$/);
+  assert.match(email.textContent, /Amen!$/, 'the proofread text is sent');
   assert.doesNotMatch(email.textContent, /Final song/);
   assert.equal(archive.entries.size, 0);
+  const sentLog = lines.find((line) => line.includes('"event":"sent"'));
+  assert.match(sentLog, /"proofread":"done","proofreadCorrected":1,"proofreadRejected":0,"proofreadFailed":0/);
 });
 
 test('model names choose Gemini or OpenAI', () => {
-  assert.deepEqual(trimModelProvider('gemini-3.5-flash'), { provider: 'gemini', model: 'gemini-3.5-flash' });
-  assert.deepEqual(trimModelProvider('models/gemini-pro-latest'), { provider: 'gemini', model: 'gemini-pro-latest' });
-  assert.equal(trimModelProvider('gpt-5-mini').provider, 'openai');
-  assert.equal(trimModelProvider('o4-mini').provider, 'openai');
-  assert.equal(trimModelProvider('claude-x').provider, null);
+  assert.deepEqual(emailModelProvider('gemini-3.5-flash'), { provider: 'gemini', model: 'gemini-3.5-flash' });
+  assert.deepEqual(emailModelProvider('models/gemini-pro-latest'), { provider: 'gemini', model: 'gemini-pro-latest' });
+  assert.equal(emailModelProvider('gpt-5-mini').provider, 'openai');
+  assert.equal(emailModelProvider('o4-mini').provider, 'openai');
+  assert.equal(emailModelProvider('claude-x').provider, null);
 });
 
 test('sentences are numbered across paragraphs and long unpunctuated text is split', () => {

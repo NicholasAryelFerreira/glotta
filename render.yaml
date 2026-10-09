@@ -36,7 +36,11 @@ services:
         sync: false
       - key: SERMON_WINDOWS
         sync: false
-      - key: SERMON_TRIM_MODEL
+      - key: SERMON_EMAIL_MODEL
         sync: false
       - key: SERMON_TRIM_PROMPT
+        sync: false
+      - key: SERMON_PROOFREAD_PROMPT
+        sync: false
+      - key: SERMON_PROOFREAD
         sync: false

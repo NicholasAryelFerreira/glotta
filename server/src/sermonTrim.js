@@ -1,8 +1,10 @@
 // Finds where the sermon starts and ends in a service transcript. The model
 // only returns two sentence numbers; the server cuts the original text there,
-// so the emailed sermon is always the transcript's own words.
+// so the emailed sermon is always the transcript's own words. The model
+// request helpers here are shared with the proofreading step, which uses the
+// same SERMON_EMAIL_MODEL.
 
-export const DEFAULT_SERMON_TRIM_MODEL = 'gemini-3.5-flash';
+export const DEFAULT_SERMON_EMAIL_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_SERMON_TRIM_PROMPT = 'This is the transcript of a Sunday church service. '
   + 'Find the sermon: the message preached by the pastor. Start at the first sentence of '
   + 'the sermon, including the Bible passage the preacher reads to introduce it and any '
@@ -49,11 +51,16 @@ const BOUNDS_GEMINI_SCHEMA = {
 };
 
 /** Picks the provider from the model name: gemini-* or gpt-*, o3, o4-mini... */
-export function trimModelProvider(model) {
+export function emailModelProvider(model) {
   const name = String(model ?? '').trim().replace(/^models\//, '');
   if (/^gemini/i.test(name)) return { provider: 'gemini', model: name };
   if (/^(gpt|chatgpt|o\d)/i.test(name)) return { provider: 'openai', model: name };
   return { provider: null, model: name };
+}
+
+/** The paid Gemini key (free as a fallback) or the OpenAI key. */
+export function emailModelApiKey(provider, apiKeys = {}) {
+  return provider === 'gemini' ? apiKeys.gemini?.paid || apiKeys.gemini?.free : apiKeys.openai;
 }
 
 function wordCount(text) {
@@ -108,7 +115,7 @@ async function readJson(response) {
   }
 }
 
-async function requestGeminiBounds({ model, apiKey, instructions, transcript, fetchImpl, timeoutMs }) {
+async function requestGeminiJson({ model, apiKey, instructions, input, geminiSchema, fetchImpl, timeoutMs }) {
   const response = await fetchImpl(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
@@ -116,10 +123,10 @@ async function requestGeminiBounds({ model, apiKey, instructions, transcript, fe
       headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: instructions }] },
-        contents: [{ role: 'user', parts: [{ text: transcript }] }],
+        contents: [{ role: 'user', parts: [{ text: input }] }],
         generationConfig: {
           responseMimeType: 'application/json',
-          responseSchema: BOUNDS_GEMINI_SCHEMA,
+          responseSchema: geminiSchema,
         },
       }),
       signal: AbortSignal.timeout(timeoutMs),
@@ -133,16 +140,16 @@ async function requestGeminiBounds({ model, apiKey, instructions, transcript, fe
   return JSON.parse(text);
 }
 
-async function requestOpenAIBounds({ model, apiKey, instructions, transcript, fetchImpl, timeoutMs }) {
+async function requestOpenAIJson({ model, apiKey, instructions, input, schemaName, jsonSchema, fetchImpl, timeoutMs }) {
   const response = await fetchImpl('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model,
       instructions,
-      input: transcript,
+      input,
       text: {
-        format: { type: 'json_schema', name: 'sermon_bounds', strict: true, schema: BOUNDS_JSON_SCHEMA },
+        format: { type: 'json_schema', name: schemaName, strict: true, schema: jsonSchema },
       },
     }),
     signal: AbortSignal.timeout(timeoutMs),
@@ -160,35 +167,47 @@ async function requestOpenAIBounds({ model, apiKey, instructions, transcript, fe
 }
 
 /**
+ * Sends instructions plus input to the email model and returns its JSON reply,
+ * shaped by geminiSchema (Gemini) or jsonSchema (OpenAI strict schema).
+ * Throws on failure.
+ */
+export function requestEmailModelJson({ provider, fetchImpl = fetch, ...request }) {
+  return provider === 'gemini'
+    ? requestGeminiJson({ ...request, fetchImpl })
+    : requestOpenAIJson({ ...request, fetchImpl });
+}
+
+/**
  * Returns the sermon's paragraphs, or the reason the full transcript should be
  * sent instead. Never throws.
  */
 export async function trimSermon({
   paragraphs,
-  model = DEFAULT_SERMON_TRIM_MODEL,
+  model = DEFAULT_SERMON_EMAIL_MODEL,
   prompt = DEFAULT_SERMON_TRIM_PROMPT,
   apiKeys = {},
   fetchImpl = fetch,
   timeoutMs = TRIM_TIMEOUT_MS,
 }) {
-  const choice = trimModelProvider(model);
+  const choice = emailModelProvider(model);
   const result = { model: choice.model };
   const sentences = splitSentences(paragraphs);
   if (sentences.length === 0) return { ...result, status: 'full', reason: 'empty' };
   if (!choice.provider) return { ...result, status: 'full', reason: 'unknown-model' };
-  const apiKey = choice.provider === 'gemini'
-    ? apiKeys.gemini?.paid || apiKeys.gemini?.free
-    : apiKeys.openai;
+  const apiKey = emailModelApiKey(choice.provider, apiKeys);
   if (!apiKey) return { ...result, status: 'full', reason: `missing-${choice.provider}-key` };
 
   let bounds;
   try {
-    const request = choice.provider === 'gemini' ? requestGeminiBounds : requestOpenAIBounds;
-    bounds = await request({
+    bounds = await requestEmailModelJson({
+      provider: choice.provider,
       model: choice.model,
       apiKey,
       instructions: `${prompt.trim()}\n\n${REPLY_FORMAT}`,
-      transcript: numberedTranscript(sentences),
+      input: numberedTranscript(sentences),
+      schemaName: 'sermon_bounds',
+      jsonSchema: BOUNDS_JSON_SCHEMA,
+      geminiSchema: BOUNDS_GEMINI_SCHEMA,
       fetchImpl,
       timeoutMs,
     });

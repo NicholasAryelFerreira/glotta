@@ -17,7 +17,7 @@ Glotta is a real-time translation platform for lectures, trainings, sermons, and
 - Supports multiple listener languages at the same time, with one shared provider stream per language.
 - Lets listeners join from a browser without installing an app.
 - Shows the speaker live listener counts, an audio input meter, and a bounded source transcript.
-- Optionally emails the weekly sermon's transcript after each Sunday service, trimmed to the sermon by a Gemini or OpenAI model.
+- Optionally emails the weekly sermon's transcript after each Sunday service, trimmed to the sermon and proofread by a Gemini or OpenAI model.
 
 ## How it works
 
@@ -125,8 +125,9 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 When configured, Glotta collects the weekly session's speaker transcript during the Sunday service windows and emails the sermon once per window, 10 minutes after the window ends, whether the session has ended, is still live, or was restarted in between.
 
 - Only the weekly session code (`WEEKLY_SESSION_ID`, default `SERMON`) is collected, and only inside `SERMON_WINDOWS`. Collecting stops at the end of a window; a live session keeps running untouched.
-- `SERMON_TRIM_MODEL` returns only the numbers of the sermon's first and last sentences, and the server cuts the original transcript there, so the email contains the transcript's own words. If the model is unsure or fails, the full window transcript is sent instead.
-- The email contains only a title such as "Sunday Morning Sermon – October 11, 2026" and the transcript. Technical details (the trim result, a server start during a window, a size-limit cut) go to the `[sermon-transcript] sent` log line instead.
+- `SERMON_EMAIL_MODEL` first returns only the numbers of the sermon's first and last sentences, and the server cuts the original transcript there. If the model is unsure or fails, the full window transcript is used instead.
+- The same model then proofreads the sermon a few paragraphs at a time, following `SERMON_PROOFREAD_PROMPT`: it removes filler words such as "uh" and "um" and accidental repeats, and corrects misheard words, punctuation and spelling from context. The server always adds fixed rules (keep the preacher's words, grammar and order; add or remove nothing) and keeps each corrected paragraph only if it stays faithful: about a third of its words changed at most, misheard words replaced at most five in a row, and at most two words in a row dropped or added without a replacement. Otherwise the original paragraph is sent. `SERMON_PROOFREAD=off` turns proofreading off.
+- The email contains only a title such as "Sunday Morning Sermon – October 11, 2026" and the sermon. Technical details (trim and proofreading results, a server start during a window, a size-limit cut) go to the `[sermon-transcript] sent` log line instead.
 - The transcript lives only in memory and is erased after the email is sent. A failed send is retried every 5 minutes for 30 minutes, then the transcript is erased. A server restart also erases it.
 - While a transcript is waiting, the server requests its own `/healthz` page every 5 minutes so Render's free plan does not put it to sleep before the email is sent.
 
@@ -139,8 +140,10 @@ When configured, Glotta collects the weekly session's speaker transcript during 
 | `SERMON_EMAIL_FROM_NAME` | `Glotta` | Sender name (default `Glotta`). |
 | `SERMON_TIMEZONE` | `America/Chicago` | Time zone of the windows (default `America/Chicago`). |
 | `SERMON_WINDOWS` | `Sun 11:00-12:20, Sun 18:10-19:20` | Service windows, 24-hour local time. |
-| `SERMON_TRIM_MODEL` | `gemini-3.5-flash` | Gemini (`gemini-...`) or OpenAI (`gpt-...`, `o4-mini`) model; uses the existing paid Gemini or OpenAI key. |
+| `SERMON_EMAIL_MODEL` | `gemini-3.5-flash` | Gemini (`gemini-...`) or OpenAI (`gpt-...`, `o4-mini`) model used, in separate calls, to trim and to proofread; uses the existing paid Gemini or OpenAI key. |
 | `SERMON_TRIM_PROMPT` | | What counts as the sermon; a built-in default is used if unset. The reply format is added by the server. |
+| `SERMON_PROOFREAD_PROMPT` | | How to correct the sermon; a built-in default is used if unset. The faithfulness rules and reply format are added by the server. |
+| `SERMON_PROOFREAD` | `off` | Optional; proofreading is on unless this is `off`. |
 
 The email feature is off unless `BREVO_API_KEY`, `SERMON_EMAIL_TO`, `SERMON_EMAIL_FROM`, and `SERMON_WINDOWS` are set.
 
