@@ -598,6 +598,13 @@ function connectWs() {
       errEl.textContent = 'This session ended because no audio was received for at least 1 hour — start a new session from the home page.';
       return;
     }
+    if (event.reason === 'session ended') {
+      // Ended on purpose, possibly from another device: do not bring it back.
+      // A server restart closes without this reason and is still recovered.
+      stop(false);
+      sessionEnded();
+      return;
+    }
     if (!pageActive) return;
     if (running) { errEl.textContent = 'Connection lost - reconnecting...'; setStatus('connecting'); }
     setTimeout(() => { if (pageActive && !ws) connectWs(); }, 1500);

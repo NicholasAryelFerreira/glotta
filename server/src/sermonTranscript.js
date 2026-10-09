@@ -451,6 +451,7 @@ export class SermonTranscriptArchive {
       return paragraphs.length > 0 ? paragraphs : null;
     } catch (err) {
       info.recordingError = err.message;
+      if (err.piece) info.recordingFailedPiece = err.piece;
       return null;
     } finally {
       await this.#deleteRecording(entry);
@@ -490,7 +491,12 @@ export class SermonTranscriptArchive {
 
   async #deliver(entry) {
     try {
-      if (!entry.email) entry.email = await this.#prepare(entry);
+      if (!entry.email) {
+        entry.email = await this.#prepare(entry);
+        // Transcribing a long recording can take half an hour; failed sends
+        // still get their full retry window after it.
+        entry.giveUpAt = Math.max(entry.giveUpAt, this.now() + SERMON_RETRY_WINDOW_MS);
+      }
       if (!entry.email.message) {
         // Audio was recorded but no words were heard in it or live.
         this.entries.delete(entry.key);

@@ -136,6 +136,36 @@ test('audio idle timeout stops capture and disables the page without scheduling 
   }
 });
 
+test('a session ended from any device stops this speaker page instead of reviving it', () => {
+  const onclose = inlineScript.match(/socket\.onclose = \(event\) => \{[\s\S]*?\n  \};/)[0];
+  const sessionEnded = inlineScript.match(/function sessionEnded\(\)[\s\S]*?\n\}/)[0];
+  for (const [reason, ends] of [['session ended', true], ['', false]]) {
+    const socket = {};
+    let stops = 0;
+    let reconnects = 0;
+    const context = {
+      socket, ws: socket, socketSeq: 1, speakerSocketSeq: 1,
+      running: true, speakerClaimed: true, pageActive: true,
+      errEl: {}, toggleBtn: { disabled: false },
+      stop: closeWs => { assert.equal(closeWs, false); stops++; },
+      setTimeout: () => { reconnects++; }, setStatus() {},
+    };
+    vm.runInNewContext(`${sessionEnded}\n${onclose}\nsocket.onclose({ reason: ${JSON.stringify(reason)} });`, context);
+    if (ends) {
+      assert.equal(stops, 1);
+      assert.equal(context.pageActive, false);
+      assert.equal(context.toggleBtn.disabled, true);
+      assert.equal(reconnects, 0, 'no reconnect, so no revival');
+      assert.match(context.errEl.textContent, /This session has ended/);
+    } else {
+      // A server restart closes without a reason and is still recovered.
+      assert.equal(stops, 0);
+      assert.equal(context.pageActive, true);
+      assert.equal(reconnects, 1);
+    }
+  }
+});
+
 function captureHarness(t) {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100_000 });
   const classes = new Set(['btn-accent']);
