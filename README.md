@@ -39,6 +39,17 @@ The browser landing page shows a Google Gemini/OpenAI GPT selector below the wee
 | Google Gemini | 70+ | Listener audio/captions use `gemini-3.5-live-translate-preview` only for active listener languages. Production speaker captions use `gemini-3.5-transcribe-live`; Testing keeps the free Live Translate stream. |
 | OpenAI GPT | 13 | Uses `gpt-realtime-translate`, which automatically detects 70+ spoken input languages. Production only. |
 
+Each live model can be switched with a server setting, for example when a provider retires a model, without a code change. If a setting is not set, the model above is used:
+
+| Setting | Default |
+| --- | --- |
+| `GEMINI_TRANSLATE_MODEL` | `gemini-3.5-live-translate-preview` |
+| `GEMINI_TRANSCRIBE_MODEL` | `gemini-3.5-transcribe-live` |
+| `OPENAI_TRANSLATE_MODEL` | `gpt-realtime-translate` |
+| `OPENAI_TRANSCRIBE_MODEL` | `gpt-live-transcribe` |
+
+The sermon email's models are set with `SERMON_EMAIL_MODEL` and `SERMON_EMAIL_FALLBACK_MODEL` (see below).
+
 The browser sends the selected provider and session mode to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. If the sermon transcript email is configured, the weekly session's speaker transcript is also held in memory during the service windows until it is emailed, then erased. The provider and session mode are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
 
 ## Repository layout

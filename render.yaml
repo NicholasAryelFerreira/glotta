@@ -20,6 +20,15 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      # Optional live model overrides; unset keeps the defaults in the code.
+      - key: GEMINI_TRANSLATE_MODEL
+        sync: false
+      - key: GEMINI_TRANSCRIBE_MODEL
+        sync: false
+      - key: OPENAI_TRANSLATE_MODEL
+        sync: false
+      - key: OPENAI_TRANSCRIBE_MODEL
+        sync: false
       # Sermon transcript email. Off unless BREVO_API_KEY, SERMON_EMAIL_TO,
       # SERMON_EMAIL_FROM and SERMON_WINDOWS are set; values live in the dashboard.
       - key: BREVO_API_KEY

@@ -14,6 +14,7 @@ import {
   SessionManager,
 } from './sessionManager.js';
 import { isSupportedLanguage, languagesForProvider } from './languages.js';
+import { OPENAI_TRANSLATION_MODEL } from './openaiTranslator.js';
 import { createSermonTranscriptArchive } from './sermonTranscript.js';
 import {
   LIVE_EDGE_LISTENER_MAX_BUFFER_SECONDS,
@@ -105,6 +106,8 @@ app.get('/api/config', (req, res) => {
       gemini: manager.hasProvider('gemini'),
       openai: manager.hasProvider('openai'),
     },
+    // Shown in the home page's OpenAI description.
+    models: { openaiTranslate: OPENAI_TRANSLATION_MODEL },
     apiTiers: {
       gemini: {
         paid: manager.hasApiTier('gemini', 'paid'),

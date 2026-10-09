@@ -15,8 +15,14 @@ import {
   reconnectDelayMs,
 } from './reconnectPolicy.js';
 
-export const LIVE_TRANSLATE_MODEL = 'gemini-3.5-live-translate-preview';
-export const LIVE_TRANSCRIBE_MODEL = 'gemini-3.5-transcribe-live';
+// Model names can be changed in Render (GEMINI_TRANSLATE_MODEL,
+// GEMINI_TRANSCRIBE_MODEL), e.g. when Google replaces a preview model.
+function modelSetting(name, defaultModel) {
+  return String(process.env[name] ?? '').trim().replace(/^models\//, '') || defaultModel;
+}
+
+export const LIVE_TRANSLATE_MODEL = modelSetting('GEMINI_TRANSLATE_MODEL', 'gemini-3.5-live-translate-preview');
+export const LIVE_TRANSCRIBE_MODEL = modelSetting('GEMINI_TRANSCRIBE_MODEL', 'gemini-3.5-transcribe-live');
 
 // The Gemini Live API endpoint. We talk to it over a raw WebSocket because the
 // installed @google/genai SDK does not yet know about `translationConfig` and

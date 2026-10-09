@@ -149,6 +149,10 @@ fetch('/api/config')
     weeklySessionId = d.weeklySessionId;
     if (d.providers) providerAvailability = d.providers;
     if (d.apiTiers) tierAvailability = d.apiTiers;
+    // The OpenAI model can be changed on the server (OPENAI_TRANSLATE_MODEL).
+    if (d.models?.openaiTranslate) {
+      PROVIDER_NOTES.openai = PROVIDER_NOTES.openai.replace('gpt-realtime-translate', d.models.openaiTranslate);
+    }
     if (providerAvailability[selectedProvider()] === false) {
       document.getElementById('providerGemini').checked = true;
     }

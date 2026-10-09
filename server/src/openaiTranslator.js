@@ -15,9 +15,14 @@ import {
   reconnectDelayMs,
 } from './reconnectPolicy.js';
 
-const TRANSLATION_MODEL = 'gpt-realtime-translate';
-const TRANSCRIPTION_MODEL = 'gpt-live-transcribe';
-const TRANSLATION_WS_URL = `wss://api.openai.com/v1/realtime/translations?model=${TRANSLATION_MODEL}`;
+// Model names can be changed in Render (OPENAI_TRANSLATE_MODEL,
+// OPENAI_TRANSCRIBE_MODEL), e.g. when OpenAI retires a model.
+export const OPENAI_TRANSLATION_MODEL = String(process.env.OPENAI_TRANSLATE_MODEL ?? '').trim()
+  || 'gpt-realtime-translate';
+export const OPENAI_TRANSCRIPTION_MODEL = String(process.env.OPENAI_TRANSCRIBE_MODEL ?? '').trim()
+  || 'gpt-live-transcribe';
+const TRANSLATION_WS_URL = 'wss://api.openai.com/v1/realtime/translations'
+  + `?model=${encodeURIComponent(OPENAI_TRANSLATION_MODEL)}`;
 // The intent query creates a transcription session before session.update is
 // sent. A model query would create a normal Realtime session instead.
 const TRANSCRIPTION_WS_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
@@ -67,7 +72,7 @@ export function openAISessionUpdate(targetLanguage, streamMode = 'translation') 
           input: {
             format: { type: 'audio/pcm', rate: 24_000 },
             transcription: {
-              model: TRANSCRIPTION_MODEL,
+              model: OPENAI_TRANSCRIPTION_MODEL,
               languages: ['en'],
               delay: 'low',
             },
