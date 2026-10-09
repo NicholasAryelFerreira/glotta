@@ -1,4 +1,9 @@
-import { emailModelApiKey, emailModelProvider, requestEmailModelJson } from './sermonTrim.js';
+import {
+  DEFAULT_SERMON_FALLBACK_MODEL,
+  EMAIL_MODEL_RETRY_DELAY_MS,
+  callEmailModel,
+  emailModelProvider,
+} from './sermonTrim.js';
 
 // Corrects the trimmed sermon a few paragraphs at a time with the same
 // SERMON_EMAIL_MODEL: filler words removed, misheard words fixed. Each
@@ -147,36 +152,49 @@ export async function proofreadSermon({
   prompt = DEFAULT_SERMON_PROOFREAD_PROMPT,
   apiKeys = {},
   fetchImpl = fetch,
+  fallbackModel = DEFAULT_SERMON_FALLBACK_MODEL,
   timeoutMs = PROOFREAD_TIMEOUT_MS,
+  retryDelayMs = EMAIL_MODEL_RETRY_DELAY_MS,
 }) {
-  const choice = emailModelProvider(model);
-  const apiKey = emailModelApiKey(choice.provider, apiKeys);
   const result = [...paragraphs];
-  const summary = { proofread: 'done', proofreadCorrected: 0, proofreadRejected: 0, proofreadFailed: 0 };
-  if (!choice.provider || !apiKey || paragraphs.length === 0) {
-    return { paragraphs: result, summary: { proofread: 'skipped' } };
-  }
-
+  if (paragraphs.length === 0) return { paragraphs: result, summary: { proofread: 'skipped' } };
+  const summary = {
+    proofread: 'done',
+    proofreadCorrected: 0,
+    proofreadRejected: 0,
+    proofreadFailed: 0,
+    proofreadRetries: 0,
+    proofreadFallback: 0,
+  };
+  const mainModel = emailModelProvider(model).model;
   const instructions = `${prompt.trim()}\n\n${PROOFREAD_RULES}`;
   const queue = batchesOf(paragraphs);
   const runBatch = async (batch) => {
     try {
-      const reply = await requestEmailModelJson({
-        provider: choice.provider,
-        model: choice.model,
-        apiKey,
-        instructions,
-        input: JSON.stringify(batch.paragraphs),
-        schemaName: 'sermon_paragraphs',
-        jsonSchema: PARAGRAPHS_JSON_SCHEMA,
-        geminiSchema: PARAGRAPHS_GEMINI_SCHEMA,
+      const answer = await callEmailModel({
+        model,
+        fallbackModel,
+        apiKeys,
+        request: {
+          instructions,
+          input: JSON.stringify(batch.paragraphs),
+          schemaName: 'sermon_paragraphs',
+          jsonSchema: PARAGRAPHS_JSON_SCHEMA,
+          geminiSchema: PARAGRAPHS_GEMINI_SCHEMA,
+        },
+        check: (reply) => {
+          const corrected = reply?.paragraphs;
+          if (!Array.isArray(corrected) || corrected.length !== batch.paragraphs.length) {
+            throw new Error('reply did not match the paragraphs sent');
+          }
+        },
         fetchImpl,
         timeoutMs,
+        retryDelayMs,
       });
-      const corrected = reply?.paragraphs;
-      if (!Array.isArray(corrected) || corrected.length !== batch.paragraphs.length) {
-        throw new Error('reply did not match the paragraphs sent');
-      }
+      summary.proofreadRetries += answer.attempts - 1;
+      if (answer.model !== mainModel) summary.proofreadFallback += 1;
+      const corrected = answer.reply.paragraphs;
       batch.paragraphs.forEach((original, offset) => {
         const fixed = typeof corrected[offset] === 'string' ? corrected[offset].trim() : '';
         if (fixed === original) return;
@@ -188,6 +206,7 @@ export async function proofreadSermon({
         }
       });
     } catch (err) {
+      summary.proofreadRetries += (err.attempts ?? 1) - 1;
       summary.proofreadFailed += batch.paragraphs.length;
       summary.proofreadError ??= err.message;
     }

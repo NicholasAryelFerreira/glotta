@@ -2,6 +2,7 @@ import { sendBrevoEmail } from './sermonEmail.js';
 import { DEFAULT_SERMON_PROOFREAD_PROMPT, proofreadSermon } from './sermonProofread.js';
 import {
   DEFAULT_SERMON_EMAIL_MODEL,
+  DEFAULT_SERMON_FALLBACK_MODEL,
   DEFAULT_SERMON_TRIM_PROMPT,
   emailModelProvider,
   sentenceTexts,
@@ -418,6 +419,7 @@ export class SermonTranscriptArchive {
       trimReason: trim?.reason ?? null,
       trimModel: trim?.model ?? null,
       trimError: trim?.error ?? null,
+      trimAttempts: trim?.attempts ?? null,
       ...proofread,
       serverStartedInWindow: entry.serverStartedInWindow,
       truncated: entry.truncated,
@@ -466,14 +468,16 @@ export function createSermonTranscriptArchive({
   ));
 
   const from = { email: value('SERMON_EMAIL_FROM'), name: value('SERMON_EMAIL_FROM_NAME') || 'Glotta' };
-  // One model trims the transcript and proofreads the sermon, in separate calls.
+  // One model trims the transcript and proofreads the sermon, in separate
+  // calls; a call that fails twice gets a third attempt with the fallback.
   const model = value('SERMON_EMAIL_MODEL') || DEFAULT_SERMON_EMAIL_MODEL;
+  const fallbackModel = value('SERMON_EMAIL_FALLBACK_MODEL') || DEFAULT_SERMON_FALLBACK_MODEL;
   const trimPrompt = value('SERMON_TRIM_PROMPT') || DEFAULT_SERMON_TRIM_PROMPT;
   const proofreadOn = !/^(off|false|no|0)$/i.test(value('SERMON_PROOFREAD'));
   const proofreadPrompt = value('SERMON_PROOFREAD_PROMPT') || DEFAULT_SERMON_PROOFREAD_PROMPT;
   if (!emailModelProvider(model).provider) {
     console.error(`[sermon-transcript] SERMON_EMAIL_MODEL "${model}" is not a Gemini or OpenAI model name; `
-      + 'emails will contain the full, uncorrected transcript.');
+      + `only the fallback ${fallbackModel} can answer.`);
   }
   const brevoApiKey = value('BREVO_API_KEY');
   const publicUrl = (value('RENDER_EXTERNAL_URL') || value('PUBLIC_BASE_URL')).replace(/\/+$/, '');
@@ -489,9 +493,23 @@ export function createSermonTranscriptArchive({
     timeZone,
     now,
     keepAwake,
-    trimTranscript: (paragraphs) => trimSermon({ paragraphs, model, prompt: trimPrompt, apiKeys, fetchImpl }),
+    trimTranscript: (paragraphs) => trimSermon({
+      paragraphs,
+      model,
+      fallbackModel,
+      prompt: trimPrompt,
+      apiKeys,
+      fetchImpl,
+    }),
     proofreadTranscript: proofreadOn
-      ? (paragraphs) => proofreadSermon({ paragraphs, model, prompt: proofreadPrompt, apiKeys, fetchImpl })
+      ? (paragraphs) => proofreadSermon({
+        paragraphs,
+        model,
+        fallbackModel,
+        prompt: proofreadPrompt,
+        apiKeys,
+        fetchImpl,
+      })
       : null,
     sendEmail: (message) => sendBrevoEmail({
       apiKey: brevoApiKey,
@@ -504,7 +522,7 @@ export function createSermonTranscriptArchive({
   });
   console.log(
     `[sermon-transcript] email on (windows: ${windows.map((window) => window.label).join(', ')} ${timeZone}; `
-    + `recipients: ${recipients.length}; copies: ${bcc.length}; model: ${model}; `
+    + `recipients: ${recipients.length}; copies: ${bcc.length}; model: ${model}; fallback: ${fallbackModel}; `
     + `trim prompt: ${value('SERMON_TRIM_PROMPT') ? 'custom' : 'default'}; `
     + `proofread: ${proofreadOn ? `on (${value('SERMON_PROOFREAD_PROMPT') ? 'custom' : 'default'} prompt)` : 'off'}; `
     + `keep-awake: ${publicUrl ? 'on' : 'off'})`,

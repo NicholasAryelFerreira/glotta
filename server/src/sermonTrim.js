@@ -5,6 +5,10 @@
 // same SERMON_EMAIL_MODEL.
 
 export const DEFAULT_SERMON_EMAIL_MODEL = 'gemini-3.5-flash';
+// Answers the third attempt when the main model failed twice.
+export const DEFAULT_SERMON_FALLBACK_MODEL = 'gpt-6-luna';
+// Wait between attempts so a briefly overloaded provider can recover.
+export const EMAIL_MODEL_RETRY_DELAY_MS = 15_000;
 export const DEFAULT_SERMON_TRIM_PROMPT = 'This is the transcript of a Sunday church service. '
   + 'Find the sermon: the message preached by the pastor. Start at the first sentence of '
   + 'the sermon, including the Bible passage the preacher reads to introduce it and any '
@@ -177,6 +181,51 @@ export function requestEmailModelJson({ provider, fetchImpl = fetch, ...request 
     : requestOpenAIJson({ ...request, fetchImpl });
 }
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Calls the email model, retrying only when a call fails (an error, a
+ * timeout, or a reply that check() rejects): twice with the main model, then
+ * once with the fallback model. Returns the reply, the model that answered
+ * and the attempts used; throws the last error, with `attempts`, otherwise.
+ */
+export async function callEmailModel({
+  model,
+  fallbackModel = DEFAULT_SERMON_FALLBACK_MODEL,
+  apiKeys = {},
+  request,
+  check = () => {},
+  fetchImpl = fetch,
+  timeoutMs,
+  retryDelayMs = EMAIL_MODEL_RETRY_DELAY_MS,
+}) {
+  const models = [model, model, fallbackModel || model];
+  let lastError = null;
+  for (const [index, name] of models.entries()) {
+    if (index > 0) await wait(retryDelayMs);
+    const choice = emailModelProvider(name);
+    try {
+      if (!choice.provider) throw new Error(`unknown model "${choice.model}"`);
+      const apiKey = emailModelApiKey(choice.provider, apiKeys);
+      if (!apiKey) throw new Error(`missing ${choice.provider} key`);
+      const reply = await requestEmailModelJson({
+        ...request,
+        provider: choice.provider,
+        model: choice.model,
+        apiKey,
+        fetchImpl,
+        timeoutMs,
+      });
+      check(reply);
+      return { reply, model: choice.model, attempts: index + 1 };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  lastError.attempts = models.length;
+  throw lastError;
+}
+
 /**
  * Returns the sermon's paragraphs, or the reason the full transcript should be
  * sent instead. Never throws.
@@ -184,35 +233,42 @@ export function requestEmailModelJson({ provider, fetchImpl = fetch, ...request 
 export async function trimSermon({
   paragraphs,
   model = DEFAULT_SERMON_EMAIL_MODEL,
+  fallbackModel = DEFAULT_SERMON_FALLBACK_MODEL,
   prompt = DEFAULT_SERMON_TRIM_PROMPT,
   apiKeys = {},
   fetchImpl = fetch,
   timeoutMs = TRIM_TIMEOUT_MS,
+  retryDelayMs = EMAIL_MODEL_RETRY_DELAY_MS,
 }) {
-  const choice = emailModelProvider(model);
-  const result = { model: choice.model };
+  const result = { model: emailModelProvider(model).model };
   const sentences = splitSentences(paragraphs);
   if (sentences.length === 0) return { ...result, status: 'full', reason: 'empty' };
-  if (!choice.provider) return { ...result, status: 'full', reason: 'unknown-model' };
-  const apiKey = emailModelApiKey(choice.provider, apiKeys);
-  if (!apiKey) return { ...result, status: 'full', reason: `missing-${choice.provider}-key` };
 
   let bounds;
   try {
-    bounds = await requestEmailModelJson({
-      provider: choice.provider,
-      model: choice.model,
-      apiKey,
-      instructions: `${prompt.trim()}\n\n${REPLY_FORMAT}`,
-      input: numberedTranscript(sentences),
-      schemaName: 'sermon_bounds',
-      jsonSchema: BOUNDS_JSON_SCHEMA,
-      geminiSchema: BOUNDS_GEMINI_SCHEMA,
+    const answer = await callEmailModel({
+      model,
+      fallbackModel,
+      apiKeys,
+      request: {
+        instructions: `${prompt.trim()}\n\n${REPLY_FORMAT}`,
+        input: numberedTranscript(sentences),
+        schemaName: 'sermon_bounds',
+        jsonSchema: BOUNDS_JSON_SCHEMA,
+        geminiSchema: BOUNDS_GEMINI_SCHEMA,
+      },
+      check: (reply) => {
+        if (typeof reply?.found !== 'boolean') throw new Error('reply was not in the expected format');
+      },
       fetchImpl,
       timeoutMs,
+      retryDelayMs,
     });
+    bounds = answer.reply;
+    result.model = answer.model;
+    result.attempts = answer.attempts;
   } catch (err) {
-    return { ...result, status: 'full', reason: 'model-error', error: err.message };
+    return { ...result, status: 'full', reason: 'model-error', error: err.message, attempts: err.attempts };
   }
 
   const start = Number(bounds?.startSentence);

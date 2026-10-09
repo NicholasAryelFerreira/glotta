@@ -65,39 +65,97 @@ test('proofreading keeps faithful corrections and the original wherever a correc
     })),
   });
   assert.deepEqual(result, [CORRECTED, 'Second paragraph stays as it is.', 'Third uh paragraph.']);
-  assert.deepEqual(summary, { proofread: 'done', proofreadCorrected: 1, proofreadRejected: 1, proofreadFailed: 0 });
+  assert.deepEqual(summary, {
+    proofread: 'done',
+    proofreadCorrected: 1,
+    proofreadRejected: 1,
+    proofreadFailed: 0,
+    proofreadRetries: 0,
+    proofreadFallback: 0,
+  });
 });
 
-test('a failed or mismatched reply keeps those paragraphs unchanged', async () => {
+test('a part that still fails after three attempts keeps its paragraphs unchanged', async () => {
   const paragraphs = ['One uh.', 'Two um.'];
   const apiKeys = { gemini: { paid: 'key' } };
+  const requests = [];
   const mismatched = await proofreadSermon({
     paragraphs,
     model: 'gemini-3.8-flash',
+    fallbackModel: 'gemini-3.5-flash',
     apiKeys,
-    fetchImpl: geminiFetch(() => ({ paragraphs: ['One. Two.'] })),
+    retryDelayMs: 0,
+    fetchImpl: geminiFetch(() => ({ paragraphs: ['One. Two.'] }), requests),
   });
+  assert.equal(requests.length, 3, 'a reply that does not match is retried');
   assert.deepEqual(mismatched.paragraphs, paragraphs);
   assert.equal(mismatched.summary.proofreadFailed, 2);
+  assert.equal(mismatched.summary.proofreadRetries, 2);
   assert.equal(mismatched.summary.proofreadError, 'reply did not match the paragraphs sent');
 
   const failed = await proofreadSermon({
     paragraphs,
     model: 'gemini-3.8-flash',
+    fallbackModel: 'gemini-3.5-flash',
     apiKeys,
+    retryDelayMs: 0,
     fetchImpl: geminiFetch(() => Response.json({ error: { message: 'overloaded' } }, { status: 503 })),
   });
   assert.deepEqual(failed.paragraphs, paragraphs);
   assert.equal(failed.summary.proofreadError, 'Gemini 503: overloaded');
 
-  assert.deepEqual(
-    (await proofreadSermon({ paragraphs, model: 'claude-x', apiKeys })).summary,
-    { proofread: 'skipped' },
-  );
-  assert.deepEqual(
-    (await proofreadSermon({ paragraphs, model: 'gemini-3.8-flash', apiKeys: {} })).summary,
-    { proofread: 'skipped' },
-  );
+  // A wrong model name or a missing key is reported after the same attempts.
+  const misconfigured = await proofreadSermon({
+    paragraphs,
+    model: 'claude-x',
+    fallbackModel: 'gpt-6-luna',
+    apiKeys,
+    retryDelayMs: 0,
+  });
+  assert.deepEqual(misconfigured.paragraphs, paragraphs);
+  assert.equal(misconfigured.summary.proofreadError, 'missing openai key');
+});
+
+test('a part that fails twice is answered by the OpenAI fallback model', async () => {
+  const requests = [];
+  let calls = 0;
+  const { paragraphs, summary } = await proofreadSermon({
+    paragraphs: ['Grace uh abounds.'],
+    model: 'gemini-3.8-flash',
+    apiKeys: { gemini: { paid: 'gemini-key' }, openai: 'openai-key' },
+    retryDelayMs: 0,
+    fetchImpl: async (url, init) => {
+      calls += 1;
+      requests.push({ url, body: JSON.parse(init.body) });
+      if (url.includes('generativelanguage')) return Response.json({ error: { message: 'overloaded' } }, { status: 503 });
+      return Response.json({
+        output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ paragraphs: ['Grace abounds.'] }) }] }],
+      });
+    },
+  });
+  assert.equal(calls, 3);
+  assert.match(requests[0].url, /gemini-3\.8-flash/);
+  assert.match(requests[1].url, /gemini-3\.8-flash/);
+  assert.equal(requests[2].url, 'https://api.openai.com/v1/responses');
+  assert.equal(requests[2].body.model, 'gpt-6-luna', 'gpt-6-luna is the default fallback');
+  assert.deepEqual(paragraphs, ['Grace abounds.']);
+  assert.equal(summary.proofreadRetries, 2);
+  assert.equal(summary.proofreadFallback, 1);
+  assert.equal(summary.proofreadCorrected, 1);
+});
+
+test('a successful call is never repeated', async () => {
+  const requests = [];
+  const { summary } = await proofreadSermon({
+    paragraphs: ['Grace uh abounds.'],
+    model: 'gemini-3.8-flash',
+    apiKeys: { gemini: { paid: 'key' } },
+    retryDelayMs: 0,
+    fetchImpl: geminiFetch(() => ({ paragraphs: ['A completely different sentence about nothing at all here.'] }), requests),
+  });
+  assert.equal(requests.length, 1, 'a rejected correction is not an error and is not retried');
+  assert.equal(summary.proofreadRejected, 1);
+  assert.equal(summary.proofreadRetries, 0);
 });
 
 test('long sermons are proofread in batches, a few requests at a time', async () => {

@@ -317,7 +317,7 @@ test('the feature stays off until Brevo, recipients, sender, and windows are set
   const on = lines.find((line) => line.includes('email on'));
   assert.match(
     on,
-    /recipients: 2; copies: 0; model: gemini-3\.5-flash; trim prompt: default; proofread: on \(default prompt\); keep-awake: off/,
+    /recipients: 2; copies: 0; model: gemini-3\.5-flash; fallback: gpt-6-luna; trim prompt: default; proofread: on \(default prompt\); keep-awake: off/,
   );
   assert.ok(lines.some((line) => line.includes('ignoring invalid SERMON_EMAIL_COPY_TO address')));
   assert.ok(lines.every((line) => !line.includes('brevo-key') && !line.includes('pastor@example.com')));
@@ -327,7 +327,7 @@ test('the feature stays off until Brevo, recipients, sender, and windows are set
     start: false,
   });
   assert.equal(off.proofreadTranscript, null);
-  assert.match(lines.at(-1), /model: gemini-3\.8-flash; trim prompt: default; proofread: off;/);
+  assert.match(lines.at(-1), /model: gemini-3\.8-flash; fallback: gpt-6-luna; trim prompt: default; proofread: off;/);
 });
 
 test('the configured archive trims and proofreads with one model, then sends through Brevo', async (context) => {
@@ -442,15 +442,55 @@ test('trimming falls back to the full transcript when the answer is unusable', a
   assert.equal((await run({ found: false, startSentence: 0, endSentence: 0, confidence: 'high' })).reason, 'not-found');
   assert.equal((await run({ found: true, startSentence: 2, endSentence: 99, confidence: 'high' })).reason, 'not-found');
   assert.equal((await run({ found: true, startSentence: 1, endSentence: 1, confidence: 'high' })).reason, 'too-short');
-  assert.equal((await run({}, { model: 'claude-x' })).reason, 'unknown-model');
-  assert.equal((await run({}, { apiKeys: {} })).reason, 'missing-gemini-key');
+  // Errors are retried twice, the last time with the fallback model.
+  const misconfigured = await run({}, { model: 'claude-x', fallbackModel: 'claude-y', retryDelayMs: 0 });
+  assert.equal(misconfigured.reason, 'model-error');
+  assert.equal(misconfigured.error, 'unknown model "claude-y"');
+  assert.equal(misconfigured.attempts, 3);
+  assert.equal((await run({}, { apiKeys: {}, retryDelayMs: 0 })).error, 'missing openai key');
   const failed = await trimSermon({
     paragraphs,
     apiKeys,
-    fetchImpl: async () => Response.json({ error: { message: 'quota exceeded' } }, { status: 429 }),
+    retryDelayMs: 0,
+    fetchImpl: async (url) => Response.json(
+      { error: { message: 'quota exceeded' } },
+      { status: url.includes('openai') ? 500 : 429 },
+    ),
   });
   assert.equal(failed.reason, 'model-error');
-  assert.equal(failed.error, 'Gemini 429: quota exceeded');
+  assert.equal(failed.error, 'OpenAI 500: quota exceeded');
+});
+
+test('a failed trim call is retried and a model answer is not', async () => {
+  const paragraphs = ['Welcome.', SERMON_SENTENCES, 'Bye.'];
+  const apiKeys = { gemini: { paid: 'key' }, openai: 'openai-key' };
+  let calls = 0;
+  const retried = await trimSermon({
+    paragraphs,
+    apiKeys,
+    retryDelayMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return Response.json({ error: { message: 'overloaded' } }, { status: 503 });
+      return answer({ found: true, startSentence: 2, endSentence: 31, confidence: 'high' })();
+    },
+  });
+  assert.equal(retried.status, 'trimmed');
+  assert.equal(retried.attempts, 2);
+  assert.equal(retried.model, 'gemini-3.5-flash');
+
+  calls = 0;
+  const notFound = await trimSermon({
+    paragraphs,
+    apiKeys,
+    retryDelayMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return answer({ found: false, startSentence: 0, endSentence: 0, confidence: 'low' })();
+    },
+  });
+  assert.equal(notFound.reason, 'not-found');
+  assert.equal(calls, 1, 'a model that answered "not found" is not asked again');
 });
 
 test('OpenAI models use the Responses API with a strict JSON schema', async () => {

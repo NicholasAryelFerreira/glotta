@@ -38,6 +38,8 @@ services:
         sync: false
       - key: SERMON_EMAIL_MODEL
         sync: false
+      - key: SERMON_EMAIL_FALLBACK_MODEL
+        sync: false
       - key: SERMON_TRIM_PROMPT
         sync: false
       - key: SERMON_PROOFREAD_PROMPT
