@@ -50,7 +50,7 @@ Each live model can be switched with a server setting, for example when a provid
 
 The sermon email's models are set with `SERMON_EMAIL_MODEL` and `SERMON_EMAIL_FALLBACK_MODEL` (see below).
 
-The browser sends the selected provider and session mode to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. If the sermon transcript email is configured, the weekly session's speaker transcript is also held in memory during the service windows until it is emailed, then erased. The provider and session mode are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
+The browser sends the selected provider and session mode to Glotta. The API keys remain on the relay server. The speaker page remembers both selections so recovery after a Render restart preserves them. Glotta streams audio and captions in memory and does not persist them to a database or file. If the sermon transcript email is configured, the weekly session's speaker transcript is also held in memory during the service windows, and its speaker audio is written to the server's temporary disk, until the email is prepared; both are then erased. The provider and session mode are fixed for the life of an active session; reconnecting the weekly code with different selections shows an error instead of silently switching keys.
 
 ## Repository layout
 
@@ -136,11 +136,12 @@ The relay server stores live sessions in memory, so free-tier hosts that sleep o
 When configured, Glotta collects the weekly session's speaker transcript during the Sunday service windows and emails the sermon once per window, 10 minutes after the window ends, whether the session has ended, is still live, or was restarted in between.
 
 - Only the weekly session code (`WEEKLY_SESSION_ID`, default `SERMON`) is collected, and only inside `SERMON_WINDOWS`. Collecting stops at the end of a window; a live session keeps running untouched.
-- `SERMON_EMAIL_MODEL` first returns only the numbers of the sermon's first and last sentences, and the server cuts the original transcript there. If the model is unsure or fails, the full window transcript is used instead.
+- During the window the speaker audio is written to the server's temporary disk. After the window it is transcribed whole with `SERMON_TRANSCRIBE_MODEL` (default `gemini-3.5-transcribe`) in pieces of up to five minutes, each cut at a pause and sent one at a time; a whole recording is transcribed more accurately than live speech. If the recording cannot be transcribed (after three attempts per piece), the live speaker transcript is used instead. `SERMON_TRANSCRIBE_MODEL=off` uses only the live transcript.
+- `SERMON_EMAIL_MODEL` first returns only the numbers of the sermon's first and last sentences, and the server cuts the transcript there. If the model is unsure or fails, the full window transcript is used instead.
 - The same model then proofreads the sermon a few paragraphs at a time, following `SERMON_PROOFREAD_PROMPT`: it removes filler words such as "uh" and "um" and accidental repeats, and corrects misheard words, punctuation and spelling from context. The server always adds fixed rules (keep the preacher's words, grammar and order; add or remove nothing) and keeps each corrected paragraph only if it stays faithful: about a third of its words changed at most, misheard words replaced at most five in a row, and at most two words in a row dropped or added without a replacement. Otherwise the original paragraph is sent. `SERMON_PROOFREAD=off` turns proofreading off.
 - A trim or proofreading call that fails (an error, a timeout, or an unusable reply) is retried after 15 seconds; the third and last attempt uses `SERMON_EMAIL_FALLBACK_MODEL` (default `gpt-6-luna`). If all three fail, the email is still sent, with that part untrimmed or uncorrected.
 - The email contains only a title such as "Sunday Morning Sermon – October 11, 2026" and the sermon. Technical details (trim and proofreading results, a server start during a window, a size-limit cut) go to the `[sermon-transcript] sent` log line instead.
-- The transcript lives only in memory and is erased after the email is sent. A failed send is retried every 5 minutes for 30 minutes, then the transcript is erased. A server restart also erases it.
+- The transcript lives only in memory and is erased after the email is sent; the recording is deleted as soon as it is transcribed, and leftover recordings are cleared when the server starts. A failed send is retried every 5 minutes for 30 minutes, then the transcript is erased. A server restart also erases both.
 - While a transcript is waiting, the server requests its own `/healthz` page every 5 minutes so Render's free plan does not put it to sleep before the email is sent.
 
 | Setting | Example | Purpose |
@@ -154,6 +155,7 @@ When configured, Glotta collects the weekly session's speaker transcript during 
 | `SERMON_WINDOWS` | `Sun 11:00-12:20, Sun 18:10-19:20` | Service windows, 24-hour local time. |
 | `SERMON_EMAIL_MODEL` | `gemini-3.5-flash` | Gemini (`gemini-...`) or OpenAI (`gpt-...`, `o4-mini`) model used, in separate calls, to trim and to proofread; uses the existing paid Gemini or OpenAI key. |
 | `SERMON_EMAIL_FALLBACK_MODEL` | `gpt-6-luna` | Model for the third attempt of a call that failed twice (default `gpt-6-luna`). |
+| `SERMON_TRANSCRIBE_MODEL` | `gemini-3.5-transcribe` | Gemini model that transcribes the recorded service audio (default `gemini-3.5-transcribe`); `off` uses only the live transcript. |
 | `SERMON_TRIM_PROMPT` | | What counts as the sermon; a built-in default is used if unset. The reply format is added by the server. |
 | `SERMON_PROOFREAD_PROMPT` | | How to correct the sermon; a built-in default is used if unset. The faithfulness rules and reply format are added by the server. |
 | `SERMON_PROOFREAD` | `off` | Optional; proofreading is on unless this is `off`. |

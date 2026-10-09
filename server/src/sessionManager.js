@@ -501,6 +501,12 @@ class Session {
     this.lastAudioAt = Date.now();
     this.scheduleSpeakerAudioMonitor();
     this.#recordSpeakerIngress(metadata);
+    try {
+      this.manager.sermonArchive?.recordAudio(this.id, base64Chunk);
+    } catch (err) {
+      // Recording the sermon must never affect the live session.
+      console.error(`[sermon-transcript] recordAudio failed: ${err.message}`);
+    }
     this.ensureSpeakerTranscript();
     this.speakerTranscriptTranslator?.sendAudio(base64Chunk);
     const stall = this.speakerTranscriptWatchdog.recordAudio({

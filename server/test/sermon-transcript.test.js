@@ -317,7 +317,7 @@ test('the feature stays off until Brevo, recipients, sender, and windows are set
   const on = lines.find((line) => line.includes('email on'));
   assert.match(
     on,
-    /recipients: 2; copies: 0; model: gemini-3\.5-flash; fallback: gpt-6-luna; trim prompt: default; proofread: on \(default prompt\); keep-awake: off/,
+    /recipients: 2; copies: 0; recording: off; model: gemini-3\.5-flash; fallback: gpt-6-luna; trim prompt: default; proofread: on \(default prompt\); keep-awake: off/,
   );
   assert.ok(lines.some((line) => line.includes('ignoring invalid SERMON_EMAIL_COPY_TO address')));
   assert.ok(lines.every((line) => !line.includes('brevo-key') && !line.includes('pastor@example.com')));
@@ -360,6 +360,7 @@ test('the configured archive trims and proofreads with one model, then sends thr
       SERMON_EMAIL_MODEL: 'gemini-3.8-flash',
       SERMON_TRIM_PROMPT: 'Keep only the sermon.',
       SERMON_PROOFREAD_PROMPT: 'Fix the misheard words.',
+      SERMON_TRANSCRIBE_MODEL: 'off',
       RENDER_EXTERNAL_URL: 'https://glotta.example.com/',
     },
     weeklySessionId: 'SERMON',

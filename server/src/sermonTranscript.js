@@ -1,5 +1,10 @@
+import { createWriteStream, mkdirSync, rmSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { sendBrevoEmail } from './sermonEmail.js';
 import { DEFAULT_SERMON_PROOFREAD_PROMPT, proofreadSermon } from './sermonProofread.js';
+import { DEFAULT_SERMON_TRANSCRIBE_MODEL, transcribeRecording } from './sermonRecording.js';
 import {
   DEFAULT_SERMON_EMAIL_MODEL,
   DEFAULT_SERMON_FALLBACK_MODEL,
@@ -10,9 +15,10 @@ import {
 } from './sermonTrim.js';
 
 // Collects the weekly session's speaker transcript during the configured
-// Sunday service windows, then emails the sermon once per window. Everything
-// stays in memory: the transcript is erased once its email is sent (or after
-// the retries run out), and a server restart erases it too.
+// Sunday service windows, then emails the sermon once per window. The
+// transcript stays in memory and the speaker audio, when recording is on, is
+// written to the server's temporary disk; both are erased once the email is
+// prepared or the retries run out, and a server restart erases them too.
 
 export const SERMON_SEND_DELAY_MS = 10 * 60_000;
 export const SERMON_RETRY_INTERVAL_MS = 5 * 60_000;
@@ -24,6 +30,12 @@ const TICK_MS = 30_000;
 const DEFAULT_TIME_ZONE = 'America/Chicago';
 // About six hours of speech, so a runaway stream cannot exhaust memory.
 const MAX_WINDOW_CHARS = 400_000;
+// Three hours of 16 kHz PCM16 (about 345 MB of temporary disk); a longer
+// recording falls back to the live transcript.
+const MAX_RECORDING_BYTES = 3 * 3_600 * 32_000;
+// Under ten seconds of audio is not worth transcribing separately.
+const MIN_RECORDING_BYTES = 10 * 32_000;
+export const SERMON_RECORDING_DIR = join(tmpdir(), 'glotta-sermon-audio');
 // A new paragraph starts at a pause after a finished sentence, once the
 // current one has a few sentences, or after any long silence. Longer
 // stretches are split at sentence ends into paragraphs of about TARGET words.
@@ -251,6 +263,8 @@ export class SermonTranscriptArchive {
     sendEmail,
     keepAwake = () => {},
     now = () => Date.now(),
+    recordingDir = null,
+    transcribeRecording: transcribeAudio = null,
   }) {
     this.weeklySessionId = weeklySessionId;
     this.windows = windows;
@@ -263,11 +277,25 @@ export class SermonTranscriptArchive {
     this.entries = new Map(); // window key -> transcript waiting to be emailed
     this.lastKeepAwakeAt = 0;
     this.timer = null;
+    this.placedMinute = null;
+    this.placed = null;
     // A start inside a window may mean a restart lost the text before it.
     this.startedAt = now();
     const startClock = localClock(this.startedAt, timeZone);
     const startWindow = findWindow(windows, startClock);
     this.startedInWindowKey = startWindow ? this.#windowKey(startClock, startWindow) : null;
+    this.recordingDir = null;
+    this.transcribeAudio = transcribeAudio;
+    if (recordingDir && transcribeAudio) {
+      try {
+        // Recordings left by a previous run can never be sent; clear them.
+        rmSync(recordingDir, { recursive: true, force: true });
+        mkdirSync(recordingDir, { recursive: true });
+        this.recordingDir = recordingDir;
+      } catch (err) {
+        console.error(`[sermon-transcript] recording off (temporary folder unavailable: ${err.message})`);
+      }
+    }
   }
 
   start() {
@@ -287,10 +315,9 @@ export class SermonTranscriptArchive {
   record(sessionId, kind, text) {
     if (sessionId !== this.weeklySessionId || typeof text !== 'string' || !text) return;
     const at = this.now();
-    const clock = localClock(at, this.timeZone);
-    const window = findWindow(this.windows, clock);
-    if (!window) return;
-    const key = this.#windowKey(clock, window);
+    const placed = this.#placeInWindow(at);
+    if (!placed) return;
+    const { clock, window, key } = placed;
     let entry = this.entries.get(key);
     if (kind === 'input-interim') {
       // Not stored, but the first hypothesis after a stored piece marks when
@@ -312,6 +339,25 @@ export class SermonTranscriptArchive {
     entry.chars += text.length;
     entry.lastPieceAt = at;
     entry.resumedAt = null;
+  }
+
+  /** Called for every speaker audio chunk; records the weekly session's audio inside a window to disk. */
+  recordAudio(sessionId, base64Chunk) {
+    if (!this.recordingDir || sessionId !== this.weeklySessionId || typeof base64Chunk !== 'string') return;
+    const at = this.now();
+    const placed = this.#placeInWindow(at);
+    if (!placed) return;
+    const entry = this.entries.get(placed.key) ?? this.#createEntry(placed.key, placed.window, placed.clock, at);
+    const recording = entry.recording ?? this.#startRecording(entry);
+    if (recording.failed || recording.tooLong) return;
+    const audio = Buffer.from(base64Chunk, 'base64');
+    if (recording.bytes + audio.length > MAX_RECORDING_BYTES) {
+      recording.tooLong = true;
+      logSermonEvent('recording-capped', { window: entry.key, minutes: Math.round(recording.bytes / 32_000 / 60) });
+      return;
+    }
+    recording.bytes += audio.length;
+    recording.stream.write(audio);
   }
 
   /** Sends due emails and keeps the server awake while any are waiting. */
@@ -337,6 +383,80 @@ export class SermonTranscriptArchive {
     return `${clock.dateKey} ${window.label}`;
   }
 
+  // The window (if any) containing a moment, looked up once per minute since
+  // audio arrives ten times a second.
+  #placeInWindow(at) {
+    const minute = Math.floor(at / 60_000);
+    if (this.placedMinute !== minute) {
+      const clock = localClock(at, this.timeZone);
+      const window = findWindow(this.windows, clock);
+      this.placedMinute = minute;
+      this.placed = window ? { clock, window, key: this.#windowKey(clock, window) } : null;
+    }
+    return this.placed;
+  }
+
+  #startRecording(entry) {
+    const path = join(this.recordingDir, `${entry.key.replace(/[^A-Za-z0-9-]+/g, '_')}.pcm`);
+    const recording = { path, bytes: 0, failed: null, tooLong: false, stream: createWriteStream(path) };
+    // A disk error must never reach the live session; the email falls back
+    // to the live transcript instead.
+    recording.stream.on('error', (err) => {
+      if (recording.failed) return;
+      recording.failed = err.message;
+      logSermonEvent('recording-failed', { window: entry.key, error: err.message });
+    });
+    entry.recording = recording;
+    return recording;
+  }
+
+  async #finishRecording(recording) {
+    if (recording.stream.closed || recording.stream.destroyed) return;
+    await new Promise((resolve) => {
+      recording.stream.once('close', resolve);
+      recording.stream.end();
+    });
+  }
+
+  async #deleteRecording(entry) {
+    const recording = entry.recording;
+    if (!recording) return;
+    entry.recording = null;
+    try {
+      await this.#finishRecording(recording);
+      await rm(recording.path, { force: true });
+    } catch (err) {
+      console.error(`[sermon-transcript] could not delete recording: ${err.message}`);
+    }
+  }
+
+  // The recording's transcript when it can be used, otherwise null so the
+  // live transcript is used. Always erases the recording.
+  async #transcribeRecording(entry, info) {
+    const recording = entry.recording;
+    if (!recording) return null;
+    try {
+      await this.#finishRecording(recording);
+      info.recordingMinutes = Math.round((recording.bytes / 32_000 / 60) * 10) / 10;
+      if (recording.failed || recording.tooLong) {
+        info.recordingError = recording.failed ?? 'recording longer than three hours';
+        return null;
+      }
+      if (recording.bytes < MIN_RECORDING_BYTES) return null;
+      const result = await this.transcribeAudio(recording.path);
+      info.recordingPieces = result.pieces;
+      const paragraphs = buildParagraphs(String(result.text ?? '')
+        .split(/\n\s*\n/)
+        .map((text) => ({ text, segment: true, pauseBeforeMs: LONG_SILENCE_MS })));
+      return paragraphs.length > 0 ? paragraphs : null;
+    } catch (err) {
+      info.recordingError = err.message;
+      return null;
+    } finally {
+      await this.#deleteRecording(entry);
+    }
+  }
+
   #createEntry(key, window, clock, at) {
     // Local minute boundaries match UTC ones in whole-minute time zones.
     const windowEndsAt = at - (at % 60_000) + (window.endMin - clock.minutes) * 60_000;
@@ -354,6 +474,7 @@ export class SermonTranscriptArchive {
       resumedAt: null,
       truncated: false,
       serverStartedInWindow: this.startedInWindowKey === key,
+      recording: null,
       busy: false,
       attempts: 0,
       email: null,
@@ -370,6 +491,12 @@ export class SermonTranscriptArchive {
   async #deliver(entry) {
     try {
       if (!entry.email) entry.email = await this.#prepare(entry);
+      if (!entry.email.message) {
+        // Audio was recorded but no words were heard in it or live.
+        this.entries.delete(entry.key);
+        logSermonEvent('nothing-to-send', { window: entry.key, ...entry.email.summary });
+        return;
+      }
       entry.attempts += 1;
       await this.sendEmail(entry.email.message);
       this.entries.delete(entry.key);
@@ -378,6 +505,7 @@ export class SermonTranscriptArchive {
       const now = this.now();
       if (now + SERMON_RETRY_INTERVAL_MS > entry.giveUpAt) {
         this.entries.delete(entry.key);
+        await this.#deleteRecording(entry);
         logSermonEvent('discarded', { window: entry.key, attempts: entry.attempts, error: err.message });
         return;
       }
@@ -392,7 +520,16 @@ export class SermonTranscriptArchive {
   }
 
   async #prepare(entry) {
-    const paragraphs = buildParagraphs(entry.pieces);
+    // The recording's transcript is the more accurate one; the live
+    // transcript is the fallback.
+    const recordingInfo = {};
+    const fromRecording = await this.#transcribeRecording(entry, recordingInfo);
+    const paragraphs = fromRecording ?? buildParagraphs(entry.pieces);
+    const source = fromRecording ? 'recording' : 'live';
+    if (paragraphs.length === 0) {
+      entry.pieces = [];
+      return { message: null, summary: { source, ...recordingInfo } };
+    }
     let trim;
     try {
       trim = await this.trimTranscript(paragraphs);
@@ -412,6 +549,8 @@ export class SermonTranscriptArchive {
     }
     const message = composeSermonEmail({ dateKey: entry.dateKey, window: entry.window, paragraphs: body });
     const summary = {
+      source,
+      ...recordingInfo,
       pieces: entry.pieces.length,
       transcriptWords: paragraphs.reduce((total, paragraph) => total + wordCount(paragraph), 0),
       emailWords: body.reduce((total, paragraph) => total + wordCount(paragraph), 0),
@@ -441,6 +580,7 @@ export function createSermonTranscriptArchive({
   fetchImpl = fetch,
   now = () => Date.now(),
   start = true,
+  recordingDir = SERMON_RECORDING_DIR,
 } = {}) {
   const value = (name) => String(env[name] ?? '').trim();
   const off = (reason) => {
@@ -478,6 +618,17 @@ export function createSermonTranscriptArchive({
   if (!emailModelProvider(model).provider) {
     console.error(`[sermon-transcript] SERMON_EMAIL_MODEL "${model}" is not a Gemini or OpenAI model name; `
       + `only the fallback ${fallbackModel} can answer.`);
+  }
+  // The speaker audio is recorded during the windows and transcribed whole
+  // with SERMON_TRANSCRIBE_MODEL; "off" keeps only the live transcript.
+  const transcribeSetting = value('SERMON_TRANSCRIBE_MODEL');
+  const transcribeModel = (transcribeSetting || DEFAULT_SERMON_TRANSCRIBE_MODEL).replace(/^models\//, '');
+  const geminiApiKey = apiKeys.gemini?.paid || apiKeys.gemini?.free;
+  let recordingOn = !/^(off|false|no|0)$/i.test(transcribeSetting);
+  if (recordingOn && (!/^gemini/i.test(transcribeModel) || !geminiApiKey)) {
+    console.error(`[sermon-transcript] recording off (SERMON_TRANSCRIBE_MODEL "${transcribeModel}" needs a Gemini model `
+      + 'and a Gemini key); the live transcript is used.');
+    recordingOn = false;
   }
   const brevoApiKey = value('BREVO_API_KEY');
   const publicUrl = (value('RENDER_EXTERNAL_URL') || value('PUBLIC_BASE_URL')).replace(/\/+$/, '');
@@ -519,10 +670,15 @@ export function createSermonTranscriptArchive({
       ...message,
       fetchImpl,
     }),
+    recordingDir: recordingOn ? recordingDir : null,
+    transcribeRecording: recordingOn
+      ? (path) => transcribeRecording({ path, model: transcribeModel, apiKey: geminiApiKey, fetchImpl })
+      : null,
   });
   console.log(
     `[sermon-transcript] email on (windows: ${windows.map((window) => window.label).join(', ')} ${timeZone}; `
-    + `recipients: ${recipients.length}; copies: ${bcc.length}; model: ${model}; fallback: ${fallbackModel}; `
+    + `recipients: ${recipients.length}; copies: ${bcc.length}; `
+    + `recording: ${archive.recordingDir ? `on (${transcribeModel})` : 'off'}; model: ${model}; fallback: ${fallbackModel}; `
     + `trim prompt: ${value('SERMON_TRIM_PROMPT') ? 'custom' : 'default'}; `
     + `proofread: ${proofreadOn ? `on (${value('SERMON_PROOFREAD_PROMPT') ? 'custom' : 'default'} prompt)` : 'off'}; `
     + `keep-awake: ${publicUrl ? 'on' : 'off'})`,
